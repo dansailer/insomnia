@@ -1,9 +1,9 @@
-import { Settings } from 'insomnia-common';
-import { identity } from 'ramda';
-import { mocked } from 'ts-jest/utils';
+import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { mocked } from 'jest-mock';
 
 import * as _constants from '../../../common/constants';
 import * as electronHelpers from '../../../common/electron-helpers';
+import { Settings } from '../../../common/settings';
 import * as models from '../../../models';
 import * as settingsHelpers from '../settings';
 import {
@@ -16,7 +16,7 @@ import {
 } from '../settings';
 
 jest.mock('../../../common/constants', () => ({
-  ...jest.requireActual<typeof _constants>('../../../common/constants'),
+  ...jest.requireActual('../../../common/constants') as typeof _constants,
   isDevelopment: jest.fn(),
 }));
 const { isDevelopment } = mocked(_constants);
@@ -38,7 +38,7 @@ describe('getLocalDevConfigFilePath', () => {
 
 describe('getConfigFile', () => {
   beforeEach(() => {
-    jest.spyOn(settingsHelpers, 'readConfigFile').mockImplementation(identity);
+    jest.spyOn(settingsHelpers, 'readConfigFile').mockImplementation(e => e);
   });
 
   afterAll(jest.resetAllMocks);

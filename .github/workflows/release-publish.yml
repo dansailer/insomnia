@@ -32,12 +32,6 @@ jobs:
       - name: Bootstrap packages
         run: npm run bootstrap
 
-      - name: Install and login to snapcraft
-        if: ${{ env.IS_PRERELEASE == 'false' }}
-        run: |
-          sudo snap install snapcraft --classic
-          echo "${{ secrets.SNAPCRAFT_LOGIN_FILE }}" > snapcraft.txt && snapcraft login --with snapcraft.txt
-
       - name: Download artifact
         uses: dawidd6/action-download-artifact@v2
         with:
@@ -47,16 +41,44 @@ jobs:
           branch: ${{ env.RELEASE_BRANCH }} # Branch workflow ran on != branch the workflow created
           path: ./artifacts/
 
+      - name: Temporarily move Windows artifacts
+        shell: bash
+        run: |
+          mv ./artifacts/windows-latest-artifacts/insomnia/dist/squirrel-windows/Insomnia.Core-${{ env.RELEASE_VERSION }}.exe ./artifacts/
+          mv ./artifacts/windows-latest-artifacts/insomnia/dist/Insomnia.Core-${{ env.RELEASE_VERSION }}-portable.exe ./artifacts/
+
+      - name: Code-sign Windows .exe artifact
+        uses: sslcom/actions-codesigner@develop
+        with:
+          command: sign
+          username: ${{secrets.ES_USERNAME}}
+          password: ${{secrets.ES_PASSWORD}}
+          credential_id: ${{secrets.ES_CREDENTIAL_ID}}
+          totp_secret: ${{secrets.ES_TOTP_SECRET}}
+          file_path: ${GITHUB_WORKSPACE}/artifacts/Insomnia.Core-${{ env.RELEASE_VERSION }}.exe
+          output_path: ${GITHUB_WORKSPACE}/artifacts/windows-latest-artifacts/insomnia/dist/squirrel-windows
+
+      - name: Code-sign Windows portable .exe artifact
+        uses: sslcom/actions-codesigner@develop
+        with:
+          command: sign
+          username: ${{secrets.ES_USERNAME}}
+          password: ${{secrets.ES_PASSWORD}}
+          credential_id: ${{secrets.ES_CREDENTIAL_ID}}
+          totp_secret: ${{secrets.ES_TOTP_SECRET}}
+          file_path: ${GITHUB_WORKSPACE}/artifacts/Insomnia.Core-${{ env.RELEASE_VERSION }}-portable.exe
+          output_path: ${GITHUB_WORKSPACE}/artifacts/windows-latest-artifacts/insomnia/dist
+
       - name: Set Inso CLI version on Github Env
         run:
           echo "INSO_VERSION=$(jq .version packages/insomnia-inso/package.json -rj)" >> $GITHUB_ENV
 
       - name: Create Release for Inso CLI
-        uses: avakar/tag-and-release@v1
+        uses: ncipollo/release-action@v1
         id: release_inso_cli
         with:
-          tag_name: lib@${{ env.INSO_VERSION }}
-          release_name: "Inso CLI ${{ env.INSO_VERSION }} 📦"
+          tag: lib@${{ env.INSO_VERSION }}
+          name: "Inso CLI ${{ env.INSO_VERSION }} 📦"
           body: "Full changelog ⇒ https://insomnia.rest/changelog"
           commit: ${{ env.RELEASE_BRANCH }}
           prerelease: ${{ env.IS_PRERELEASE }}
@@ -76,11 +98,11 @@ jobs:
           draft: false
 
       - name: Create Tag and Release
-        uses: avakar/tag-and-release@v1
+        uses: ncipollo/release-action@v1
         id: core_tag_and_release
         with:
-          tag_name: ${{ env.RELEASE_CORE_TAG }}
-          release_name: "Insomnia ${{ env.RELEASE_VERSION }} 📦"
+          tag: ${{ env.RELEASE_CORE_TAG }}
+          name: "Insomnia ${{ env.RELEASE_VERSION }} 📦"
           body: "Full changelog ⇒ https://insomnia.rest/changelog"
           commit: ${{ env.RELEASE_BRANCH }}
           prerelease: ${{ env.IS_PRERELEASE }}
@@ -135,14 +157,12 @@ jobs:
 
       - name: Upload to snapcraft (stable only)
         if: ${{ env.IS_PRERELEASE == 'false' }}
-        run: snapcraft upload --release stable artifacts/ubuntu-latest-artifacts/insomnia/dist/*.snap
-
-      - name: Publish npm packages
-        run: |
-          npm config set //registry.npmjs.org/:_authToken ${NPM_TOKEN}
-          npm run publish -- --pre-dist-tag ${{ contains(github.event.inputs.version, 'alpha') && 'alpha' || 'beta' }} --yes
+        uses: snapcore/action-publish@7fe468c9de12396a9c8964af5d0dfd1d5b493bd7
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_LOGIN_FILE }}
+        with:
+          snap: artifacts/ubuntu-latest-artifacts/insomnia/dist/Insomnia.Core-${{ env.RELEASE_VERSION }}.snap
+          release: stable
 
       - name: Upload .deb to pulp (stable only)
         if: ${{ env.IS_PRERELEASE == 'false' }}
@@ -170,6 +190,19 @@ jobs:
           DOCKER_REGISTRY: docker.io
           DOCKER_IMAGE: kong/inso
           DOCKER_LATEST_TAG: ${{ env.IS_PRERELEASE == 'false' && 'latest' || contains(github.event.inputs.version, 'alpha') && 'alpha' || 'beta' }}
+
+      - name: Upload sourcemaps to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: '${{ secrets.SENTRY_AUTH_TOKEN }}'
+          SENTRY_ORG: '${{ secrets.SENTRY_ORG }}'
+          SENTRY_PROJECT: '${{ secrets.SENTRY_PROJECT }}'
+        run: |
+          curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="2.2.0" bash
+
+          sentry-cli releases new ${{ env.RELEASE_VERSION }}
+          sentry-cli releases set-commits ${{ env.RELEASE_VERSION }} --commit 'Kong/insomnia@${{ env.RELEASE_BRANCH }}'
+
+          sentry-cli sourcemaps upload -r ${{ env.RELEASE_VERSION }} ./artifacts/*-latest-sentry
 
       - name: Configure Git user
         uses: Homebrew/actions/git-user-config@master

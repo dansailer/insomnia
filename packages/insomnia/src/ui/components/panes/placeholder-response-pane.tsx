@@ -1,8 +1,10 @@
-import { HotKeyRegistry } from 'insomnia-common';
-import React, { FunctionComponent } from 'react';
+import React, { FC, PropsWithChildren } from 'react';
+import { useSelector } from 'react-redux';
 import styled from 'styled-components';
 
-import { hotKeyRefs } from '../../../common/hotkeys';
+import { keyboardShortcutDescriptions } from '../../../common/hotkeys';
+import { KeyboardShortcut } from '../../../common/settings';
+import { selectHotKeyRegistry } from '../../redux/selectors';
 import { Hotkey } from '../hotkey';
 import { Pane, PaneBody, PaneHeader } from './pane';
 
@@ -26,36 +28,34 @@ const Description = styled.div({
   marginRight: '2em',
 });
 
-interface Props {
-  hotKeyRegistry: HotKeyRegistry;
-}
+export const PlaceholderResponsePane: FC<PropsWithChildren<{}>> = ({ children }) => {
+  const hotKeyRegistry = useSelector(selectHotKeyRegistry);
+  return (
+    <Pane type="response">
+      <PaneHeader />
+      <PaneBody placeholder>
+        <Wrapper>
+          {[
+            'request_send',
+            'request_focusUrl',
+            'showCookiesEditor',
+            'environment_showEditor',
+            'preferences_showKeyboardShortcuts',
+          ].map(shortcut => (
+            <Item key={shortcut}>
+              <Description>{keyboardShortcutDescriptions[shortcut as KeyboardShortcut]}</Description>
+              <code>
+                <Hotkey
+                  keyBindings={hotKeyRegistry[shortcut as KeyboardShortcut]}
+                  useFallbackMessage
+                />
+              </code>
 
-// TODO: get hotKeyRegistry from redux
-export const PlaceholderResponsePane: FunctionComponent<Props> = ({ hotKeyRegistry, children }) => (
-  <Pane type="response">
-    <PaneHeader />
-    <PaneBody placeholder>
-      <Wrapper>
-        {[
-          hotKeyRefs.REQUEST_SEND,
-          hotKeyRefs.REQUEST_FOCUS_URL,
-          hotKeyRefs.SHOW_COOKIES_EDITOR,
-          hotKeyRefs.ENVIRONMENT_SHOW_EDITOR,
-          hotKeyRefs.PREFERENCES_SHOW_KEYBOARD_SHORTCUTS,
-        ].map(({ description, id }) => (
-          <Item key={id}>
-            <Description>{description}</Description>
-            <code>
-              <Hotkey
-                keyBindings={hotKeyRegistry[id]}
-                useFallbackMessage
-              />
-            </code>
-
-          </Item>
-        ))}
-      </Wrapper>
-    </PaneBody>
-    {children}
-  </Pane>
-);
+            </Item>
+          ))}
+        </Wrapper>
+      </PaneBody>
+      {children}
+    </Pane>
+  );
+};

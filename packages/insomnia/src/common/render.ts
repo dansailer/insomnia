@@ -1,5 +1,4 @@
 import clone from 'clone';
-import { setDefaultProtocol } from 'insomnia-url';
 import orderedJSON from 'json-order';
 
 import * as models from '../models';
@@ -9,9 +8,11 @@ import type { GrpcRequest, GrpcRequestBody } from '../models/grpc-request';
 import { isProject, Project } from '../models/project';
 import type { Request } from '../models/request';
 import { isRequestGroup, RequestGroup } from '../models/request-group';
+import { WebSocketRequest } from '../models/websocket-request';
 import { isWorkspace, Workspace } from '../models/workspace';
 import * as templating from '../templating';
 import * as templatingUtils from '../templating/utils';
+import { setDefaultProtocol } from '../utils/url/protocol';
 import { CONTENT_TYPE_GRAPHQL, JSON_ORDER_SEPARATOR } from './constants';
 import { database as db } from './database';
 
@@ -148,7 +149,7 @@ export async function buildRenderContext(
         }
       } else if (Object.prototype.toString.call(subContext[key]) === '[object Object]') {
         // Context is of Type object, Call this function recursively to handle nested objects.
-        subContext[key] = renderSubContext(subObject[key], subContext[key]);
+        subContext[key] = await renderSubContext(subObject[key], subContext[key]);
       } else {
         // For all other Types, add the Object to the Context.
         subContext[key] = subObject[key];
@@ -169,7 +170,7 @@ export async function buildRenderContext(
   const keys = _getOrderedEnvironmentKeys(finalRenderContext);
 
   // Render recursive references and tags.
-  const skipNextTime = {};
+  const skipNextTime: Record<string, boolean> = {};
 
   for (let i = 0; i < 3; i++) {
     for (const key of keys) {
@@ -273,9 +274,11 @@ export async function render<T>(
 
       for (const key of keys) {
         if (first && key.indexOf('_') === 0) {
+          // @ts-expect-error -- mapping unsoundness
           x[key] = await next(x[key], path);
         } else {
           const pathPrefix = path ? path + '.' : '';
+          // @ts-expect-error -- mapping unsoundness
           x[key] = await next(x[key], `${pathPrefix}${key}`);
         }
       }
@@ -287,7 +290,7 @@ export async function render<T>(
   return next<T>(newObj, name, true);
 }
 
-interface RenderRequest<T extends Request | GrpcRequest> {
+interface RenderRequest<T extends Request | GrpcRequest | WebSocketRequest> {
   request: T;
 }
 
@@ -297,7 +300,7 @@ interface BaseRenderContextOptions {
   extraInfo?: ExtraRenderInfo;
 }
 
-interface RenderContextOptions extends BaseRenderContextOptions, Partial<RenderRequest<Request | GrpcRequest>> {
+interface RenderContextOptions extends BaseRenderContextOptions, Partial<RenderRequest<Request | GrpcRequest | WebSocketRequest>> {
   ancestors?: RenderContextAncestor[];
 }
 export async function getRenderContext(
@@ -322,10 +325,10 @@ export async function getRenderContext(
     workspace ? workspace._id : 'n/a',
   );
   const subEnvironment = await models.environment.getById(environmentId || 'n/a');
-  const keySource = {};
+  const keySource: Record<string, string> = {};
 
   // Function that gets Keys and stores their Source location
-  function getKeySource(subObject, inKey, inSource) {
+  function getKeySource(subObject: string | Record<string, any>, inKey: string, inSource: string) {
     // Add key to map if it's not root
     if (inKey) {
       keySource[templatingUtils.normalizeToDotAndBracketNotation(inKey)] = inSource;
@@ -336,10 +339,12 @@ export async function getRenderContext(
 
     if (typeStr === '[object Object]') {
       for (const key of Object.keys(subObject)) {
+        // @ts-expect-error -- mapping unsoundness
         getKeySource(subObject[key], templatingUtils.forceBracketNotation(inKey, key), inSource);
       }
     } else if (typeStr === '[object Array]') {
       for (let i = 0; i < subObject.length; i++) {
+        // @ts-expect-error -- mapping unsoundness
         getKeySource(subObject[i], templatingUtils.forceBracketNotation(inKey, i), inSource);
       }
     }
@@ -504,12 +509,9 @@ export async function getRenderedRequestAndContext(
   return {
     context: renderContext,
     request: {
-      // Add the yummy cookies
       cookieJar: renderedCookieJar,
       cookies: [],
       isPrivate: false,
-      // NOTE: Flow doesn't like Object.assign, so we have to do each property manually
-      // for now to convert Request to RenderedRequest.
       _id: renderedRequest._id,
       authentication: renderedRequest.authentication,
       body: renderedRequest.body,
@@ -542,7 +544,7 @@ export async function getRenderedRequestAndContext(
  * @param v
  * @returns {number}
  */
-function _nunjucksSortValue(v) {
+function _nunjucksSortValue(v: string) {
   return v?.match?.(/({{|{%)/) ? 2 : 1;
 }
 
@@ -556,11 +558,12 @@ function _getOrderedEnvironmentKeys(finalRenderContext: Record<string, any>): st
   });
 }
 
-type RenderContextAncestor = Request | GrpcRequest | RequestGroup | Workspace | Project;
-export async function getRenderContextAncestors(base?: Request | GrpcRequest | Workspace): Promise<RenderContextAncestor[]> {
+type RenderContextAncestor = Request | GrpcRequest | WebSocketRequest | RequestGroup | Workspace | Project;
+export async function getRenderContextAncestors(base?: Request | GrpcRequest | WebSocketRequest | Workspace): Promise<RenderContextAncestor[]> {
   return await db.withAncestors<RenderContextAncestor>(base || null, [
     models.request.type,
     models.grpcRequest.type,
+    models.webSocketRequest.type,
     models.requestGroup.type,
     models.workspace.type,
     models.project.type,

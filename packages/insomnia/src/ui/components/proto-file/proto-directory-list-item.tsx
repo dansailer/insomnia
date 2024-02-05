@@ -1,7 +1,7 @@
-import { Button } from 'insomnia-components';
 import React, { FunctionComponent, useCallback } from 'react';
 
 import type { ProtoDirectory } from '../../../models/proto-directory';
+import { Button } from '../themed-button';
 import type { DeleteProtoDirectoryHandler } from './proto-file-list';
 import { ProtoListItem } from './proto-list-item';
 
@@ -13,8 +13,8 @@ interface Props {
 
 export const ProtoDirectoryListItem: FunctionComponent<Props> = ({ dir, indentLevel, handleDeleteDirectory }) => {
   const handleDeleteCallback = useCallback(
-    async (e: React.SyntheticEvent<HTMLButtonElement>) => {
-      e.stopPropagation();
+    async (event: React.SyntheticEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
       await handleDeleteDirectory(dir);
     },
     [handleDeleteDirectory, dir],

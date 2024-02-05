@@ -1,8 +1,8 @@
-import { SettingsOfType } from 'insomnia-common';
 import React, { ChangeEventHandler, FC, InputHTMLAttributes, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 
 import { snapNumberToLimits } from '../../../common/misc';
+import { SettingsOfType } from '../../../common/settings';
 import * as models from '../../../models/index';
 import { selectSettings } from '../../redux/selectors';
 import { HelpTooltip } from '../help-tooltip';
@@ -13,6 +13,7 @@ interface Props {
   max?: InputHTMLAttributes<HTMLInputElement>['max'];
   min: InputHTMLAttributes<HTMLInputElement>['min'];
   setting: SettingsOfType<number>;
+  step?: InputHTMLAttributes<HTMLInputElement>['step'];
 }
 
 export const NumberSetting: FC<Props> = ({
@@ -21,6 +22,7 @@ export const NumberSetting: FC<Props> = ({
   max,
   min,
   setting,
+  step = 1,
 }) => {
   const settings = useSelector(selectSettings);
 
@@ -54,6 +56,7 @@ export const NumberSetting: FC<Props> = ({
           name={setting}
           onChange={handleOnChange}
           type={'number'}
+          step={step}
         />
       </label>
     </div>

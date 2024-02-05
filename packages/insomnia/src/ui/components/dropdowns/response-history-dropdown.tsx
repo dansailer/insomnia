@@ -1,77 +1,135 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
 import { differenceInHours, differenceInMinutes, isThisWeek, isToday } from 'date-fns';
-import React, { Fragment, PureComponent } from 'react';
+import React, { Fragment, useCallback, useRef } from 'react';
+import { useSelector } from 'react-redux';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
-import { hotKeyRefs } from '../../../common/hotkeys';
-import { executeHotKey } from '../../../common/hotkeys-listener';
 import { decompressObject } from '../../../common/misc';
-import type { Environment } from '../../../models/environment';
-import type { RequestVersion } from '../../../models/request-version';
-import type { Response } from '../../../models/response';
-import { Dropdown } from '../base/dropdown/dropdown';
+import * as models from '../../../models/index';
+import { Response } from '../../../models/response';
+import { isWebSocketResponse, WebSocketResponse } from '../../../models/websocket-response';
+import { updateRequestMetaByParentId } from '../../hooks/create-request';
+import { selectActiveEnvironment, selectActiveRequest, selectActiveRequestResponses, selectRequestVersions } from '../../redux/selectors';
+import { type DropdownHandle, Dropdown } from '../base/dropdown/dropdown';
 import { DropdownButton } from '../base/dropdown/dropdown-button';
 import { DropdownDivider } from '../base/dropdown/dropdown-divider';
 import { DropdownItem } from '../base/dropdown/dropdown-item';
 import { PromptButton } from '../base/prompt-button';
-import { KeydownBinder } from '../keydown-binder';
+import { useDocBodyKeyboardShortcuts } from '../keydown-binder';
 import { SizeTag } from '../tags/size-tag';
 import { StatusTag } from '../tags/status-tag';
 import { TimeTag } from '../tags/time-tag';
 import { URLTag } from '../tags/url-tag';
 import { TimeFromNow } from '../time-from-now';
 
-interface Props {
-  handleSetActiveResponse: Function;
-  handleDeleteResponses: Function;
-  handleDeleteResponse: Function;
-  requestId: string;
-  responses: Response[];
-  requestVersions: RequestVersion[];
-  activeResponse: Response;
-  activeEnvironment?: Environment | null;
+interface Props<GenericResponse extends Response | WebSocketResponse> {
+  activeResponse: GenericResponse;
   className?: string;
+  requestId: string;
 }
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class ResponseHistoryDropdown extends PureComponent<Props> {
-  _dropdown: Dropdown | null = null;
+export const ResponseHistoryDropdown = <GenericResponse extends Response | WebSocketResponse>({
+  activeResponse,
+  className,
+  requestId,
+}: Props<GenericResponse>) => {
+  const dropdownRef = useRef<DropdownHandle>(null);
+  const activeEnvironment = useSelector(selectActiveEnvironment);
+  const responses = useSelector(selectActiveRequestResponses) as GenericResponse[];
+  const activeRequest = useSelector(selectActiveRequest);
+  const requestVersions = useSelector(selectRequestVersions);
+  const now = new Date();
+  const categories: Record<string, GenericResponse[]> = {
+    minutes: [],
+    hours: [],
+    today: [],
+    week: [],
+    other: [],
+  };
 
-  _handleDeleteResponses() {
-    const { requestId, activeEnvironment } = this.props;
+  const handleSetActiveResponse = useCallback(async (requestId: string, activeResponse: Response | WebSocketResponse) => {
+    if (isWebSocketResponse(activeResponse)) {
+      window.main.webSocket.close({ requestId });
+    }
+
+    if (activeResponse.requestVersionId) {
+      await models.requestVersion.restore(activeResponse.requestVersionId);
+    }
+
+    await updateRequestMetaByParentId(requestId, { activeResponseId: activeResponse._id });
+  }, []);
+
+  const handleDeleteResponses = useCallback(async () => {
     const environmentId = activeEnvironment ? activeEnvironment._id : null;
-    this.props.handleDeleteResponses(requestId, environmentId);
-  }
+    if (isWebSocketResponse(activeResponse)) {
+      window.main.webSocket.closeAll();
+      await models.webSocketResponse.removeForRequest(requestId, environmentId);
+    } else {
+      await models.response.removeForRequest(requestId, environmentId);
+    }
+    if (activeRequest && activeRequest._id === requestId) {
+      await updateRequestMetaByParentId(requestId, { activeResponseId: null });
+    }
+  }, [activeEnvironment, activeRequest, activeResponse, requestId]);
 
-  _handleDeleteResponse() {
-    this.props.handleDeleteResponse(this.props.activeResponse);
-  }
+  const handleDeleteResponse = useCallback(async () => {
+    let response: Response | WebSocketResponse | null = null;
+    if (activeResponse) {
+      if (isWebSocketResponse(activeResponse)) {
+        window.main.webSocket.close({ requestId });
+        await models.webSocketResponse.remove(activeResponse);
+        const environmentId = activeEnvironment?._id || null;
+        response = await models.webSocketResponse.getLatestForRequest(requestId, environmentId);
+      } else {
+        await models.response.remove(activeResponse);
+        const environmentId = activeEnvironment?._id || null;
+        response = await models.response.getLatestForRequest(requestId, environmentId);
+      }
 
-  _handleSetActiveResponse(response: Response) {
-    this.props.handleSetActiveResponse(response);
-  }
+      if (response?.requestVersionId) {
+        // Deleting a response restores latest request body
+        await models.requestVersion.restore(response.requestVersionId);
+      }
 
-  _handleKeydown(event: KeyboardEvent) {
-    executeHotKey(event, hotKeyRefs.REQUEST_TOGGLE_HISTORY, () => {
-      this._dropdown?.toggle(true);
-    });
-  }
+      await updateRequestMetaByParentId(requestId, { activeResponseId: response?._id || null });
+    }
+  }, [activeEnvironment?._id, activeResponse, requestId]);
 
-  renderDropdownItem(response: Response) {
-    const { activeResponse, requestVersions } = this.props;
+  responses.forEach(response => {
+    const responseTime = new Date(response.created);
+
+    if (differenceInMinutes(now, responseTime) < 5) {
+      categories.minutes.push(response);
+      return;
+    }
+
+    if (differenceInHours(now, responseTime) < 2) {
+      categories.hours.push(response);
+      return;
+    }
+
+    if (isToday(responseTime)) {
+      categories.today.push(response);
+      return;
+    }
+
+    if (isThisWeek(responseTime)) {
+      categories.week.push(response);
+      return;
+    }
+
+    categories.other.push(response);
+  });
+
+  const renderResponseRow = (response: GenericResponse) => {
     const activeResponseId = activeResponse ? activeResponse._id : 'n/a';
     const active = response._id === activeResponseId;
-    const message =
-      'Request will not be restored with this response because ' +
-      'it was created before this ability was added';
-    const requestVersion = requestVersions.find(v => v._id === response.requestVersionId);
+    const requestVersion = requestVersions.find(({ _id }) => _id === response.requestVersionId);
     const request = requestVersion ? decompressObject(requestVersion.compressedRequest) : null;
+
     return (
       <DropdownItem
         key={response._id}
         disabled={active}
-        value={response}
-        onClick={this._handleSetActiveResponse}
+        onClick={() => handleSetActiveResponse(requestId, response)}
       >
         {active ? <i className="fa fa-thumb-tack" /> : <i className="fa fa-empty" />}{' '}
         <StatusTag
@@ -87,117 +145,67 @@ export class ResponseHistoryDropdown extends PureComponent<Props> {
           tooltipDelay={1000}
         />
         <TimeTag milliseconds={response.elapsedTime} small tooltipDelay={1000} />
-        <SizeTag
-          bytesRead={response.bytesRead}
-          bytesContent={response.bytesContent}
-          small
-          tooltipDelay={1000}
-        />
-        {!response.requestVersionId && <i className="icon fa fa-info-circle" title={message} />}
+        {!isWebSocketResponse(response) && (
+          <SizeTag
+            bytesRead={response.bytesRead}
+            bytesContent={response.bytesContent}
+            small
+            tooltipDelay={1000}
+          />
+        )}
+        {!response.requestVersionId ?
+          <i
+            className="icon fa fa-info-circle"
+            title={'Request will not be restored with this response because it was created before this ability was added'}
+          />
+          : null}
       </DropdownItem>
     );
-  }
+  };
 
-  renderPastResponses(responses: Response[]) {
-    const now = new Date();
+  useDocBodyKeyboardShortcuts({
+    request_toggleHistory: () => dropdownRef.current?.toggle(true),
+  });
 
-    const categories: Record<string, Response[]> = {
-      minutes: [],
-      hours: [],
-      today: [],
-      week: [],
-      other: [],
-    };
-
-    responses.forEach(response => {
-      const responseTime = new Date(response.created);
-
-      if (differenceInMinutes(now, responseTime) < 5) {
-        categories.minutes.push(response);
-        return;
-      }
-
-      if (differenceInHours(now, responseTime) < 2) {
-        categories.hours.push(response);
-        return;
-      }
-
-      if (isToday(responseTime)) {
-        categories.today.push(response);
-        return;
-      }
-
-      if (isThisWeek(responseTime)) {
-        categories.week.push(response);
-        return;
-      }
-
-      categories.other.push(response);
-    });
-
-    return (
+  const environmentName = activeEnvironment ? activeEnvironment.name : 'Base';
+  const isLatestResponseActive = !responses.length || activeResponse._id === responses[0]._id;
+  return (
+    <Dropdown
+      ref={dropdownRef}
+      key={activeResponse ? activeResponse._id : 'n/a'}
+      className={className}
+    >
+      <DropdownButton className="btn btn--super-compact tall" title="Response history">
+        {activeResponse && <TimeFromNow timestamp={activeResponse.created} titleCase />}
+        {!isLatestResponseActive ? (
+          <i className="fa fa-thumb-tack space-left" />
+        ) : (
+          <i className="fa fa-caret-down space-left" />
+        )}
+      </DropdownButton>
+      <DropdownDivider>
+        <strong>{environmentName}</strong> Responses
+      </DropdownDivider>
+      <DropdownItem buttonClass={PromptButton} onClick={handleDeleteResponse}>
+        <i className="fa fa-trash-o" />
+        Delete Current Response
+      </DropdownItem>
+      <DropdownItem buttonClass={PromptButton} onClick={handleDeleteResponses}>
+        <i className="fa fa-trash-o" />
+        Clear History
+      </DropdownItem>
       <Fragment>
         <DropdownDivider>Just Now</DropdownDivider>
-        {categories.minutes.map(this.renderDropdownItem)}
+        {categories.minutes.map(renderResponseRow)}
         <DropdownDivider>Less Than Two Hours Ago</DropdownDivider>
-        {categories.hours.map(this.renderDropdownItem)}
+        {categories.hours.map(renderResponseRow)}
         <DropdownDivider>Today</DropdownDivider>
-        {categories.today.map(this.renderDropdownItem)}
+        {categories.today.map(renderResponseRow)}
         <DropdownDivider>This Week</DropdownDivider>
-        {categories.week.map(this.renderDropdownItem)}
+        {categories.week.map(renderResponseRow)}
         <DropdownDivider>Older Than This Week</DropdownDivider>
-        {categories.other.map(this.renderDropdownItem)}
+        {categories.other.map(renderResponseRow)}
       </Fragment>
-    );
-  }
-
-  render() {
-    const {
-      activeResponse,
-      // eslint-disable-line @typescript-eslint/no-unused-vars
-      handleSetActiveResponse,
-      // eslint-disable-line @typescript-eslint/no-unused-vars
-      handleDeleteResponses,
-      // eslint-disable-line @typescript-eslint/no-unused-vars
-      handleDeleteResponse,
-      // eslint-disable-line @typescript-eslint/no-unused-vars
-      responses,
-      activeEnvironment,
-      ...extraProps
-    } = this.props;
-    const environmentName = activeEnvironment ? activeEnvironment.name : 'Base';
-    const isLatestResponseActive = !responses.length || activeResponse._id === responses[0]._id;
-    return (
-      <KeydownBinder onKeydown={this._handleKeydown}>
-        <Dropdown
-          ref={ref => {
-            this._dropdown = ref;
-          }}
-          key={activeResponse ? activeResponse._id : 'n/a'}
-          {...extraProps}
-        >
-          <DropdownButton className="btn btn--super-compact tall" title="Response history">
-            {activeResponse && <TimeFromNow timestamp={activeResponse.created} titleCase />}
-            {!isLatestResponseActive ? (
-              <i className="fa fa-thumb-tack space-left" />
-            ) : (
-              <i className="fa fa-caret-down space-left" />
-            )}
-          </DropdownButton>
-          <DropdownDivider>
-            <strong>{environmentName}</strong> Responses
-          </DropdownDivider>
-          <DropdownItem buttonClass={PromptButton} addIcon onClick={this._handleDeleteResponse}>
-            <i className="fa fa-trash-o" />
-            Delete Current Response
-          </DropdownItem>
-          <DropdownItem buttonClass={PromptButton} addIcon onClick={this._handleDeleteResponses}>
-            <i className="fa fa-trash-o" />
-            Clear History
-          </DropdownItem>
-          {this.renderPastResponses(responses)}
-        </Dropdown>
-      </KeydownBinder>
-    );
-  }
-}
+    </Dropdown>
+  );
+};

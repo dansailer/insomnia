@@ -1,15 +1,9 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import React, { FC, PureComponent } from 'react';
+import React, { FC, forwardRef, useImperativeHandle, useRef, useState } from 'react';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
 import { Link } from '../base/link';
-import { Modal } from '../base/modal';
+import { type ModalHandle, Modal, ModalProps } from '../base/modal';
 import { ModalBody } from '../base/modal-body';
 import { ModalHeader } from '../base/modal-header';
-
-interface State {
-  isJSON: boolean;
-}
 
 interface HelpExample {
   code: string;
@@ -37,10 +31,10 @@ const JSONPathHelp: FC = () => (
     <HelpExamples
       helpExamples={[
         { code: '$.store.books[*].title', description: 'Get titles of all books in the store' },
-        { code: '$.store.books[?(`@.price < 10)].title', description: 'Get books costing less than $10' },
+        { code: '$.store.books[?(@.price < 10)].title', description: 'Get books costing less than $10' },
         { code: '$.store.books[-1:]', description: 'Get the last book in the store' },
         { code: '$.store.books.length', description: 'Get the number of books in the store' },
-        { code: '$.store.books[?(`@.title.match(/lord.*rings/i))]', description: 'Get book by title regular expression' },
+        { code: '$.store.books[?(@.title.match(/lord.*rings/i))]', description: 'Get book by title regular expression' },
       ]}
     />
     <p className="notice info">
@@ -65,37 +59,38 @@ const XPathHelp: FC = () => (
     />
   </ModalBody>
 );
-
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class FilterHelpModal extends PureComponent<{}, State> {
-  state: State = {
-    isJSON: true,
-  };
-
-  modal: Modal | null = null;
-
-  _setModalRef(n: Modal) {
-    this.modal = n;
-  }
-
-  show(isJSON: boolean) {
-    this.setState({ isJSON });
-    this.modal?.show();
-  }
-
-  hide() {
-    this.modal?.hide();
-  }
-
-  render() {
-    const { isJSON } = this.state;
-    const isXPath = !isJSON;
-    return (
-      <Modal ref={this._setModalRef}>
-        <ModalHeader>Response Filtering Help</ModalHeader>
-        {isJSON ? <JSONPathHelp /> : null}
-        {isXPath ? <XPathHelp /> : null}
-      </Modal>
-    );
-  }
+interface FilterHelpModalOptions {
+  isJSON: boolean;
 }
+export interface FilterHelpModalHandle {
+  show: (options: FilterHelpModalOptions) => void;
+  hide: () => void;
+}
+
+export const FilterHelpModal = forwardRef<FilterHelpModalHandle, ModalProps>((_, ref) => {
+  const modalRef = useRef<ModalHandle>(null);
+  const [state, setState] = useState<FilterHelpModalOptions>({
+    isJSON: true,
+  });
+
+  useImperativeHandle(ref, () => ({
+    hide: () => {
+      modalRef.current?.hide();
+    },
+    show: options => {
+      const { isJSON } = options;
+      setState({ isJSON });
+      modalRef.current?.show();
+    },
+  }), []);
+  const { isJSON } = state;
+  const isXPath = !isJSON;
+  return (
+    <Modal ref={modalRef}>
+      <ModalHeader>Response Filtering Help</ModalHeader>
+      {isJSON ? <JSONPathHelp /> : null}
+      {isXPath ? <XPathHelp /> : null}
+    </Modal>
+  );
+});
+FilterHelpModal.displayName = 'FilterHelpModal';

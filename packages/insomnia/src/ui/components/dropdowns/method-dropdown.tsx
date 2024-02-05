@@ -1,46 +1,38 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import React, { PureComponent } from 'react';
+import React, { forwardRef, useCallback, useState } from 'react';
 
 import * as constants from '../../../common/constants';
-import { AUTOBIND_CFG, METHOD_GRPC } from '../../../common/constants';
-import { Dropdown } from '../base/dropdown/dropdown';
+import { METHOD_GRPC } from '../../../common/constants';
+import { type DropdownHandle, Dropdown } from '../base/dropdown/dropdown';
 import { DropdownButton } from '../base/dropdown/dropdown-button';
 import { DropdownDivider } from '../base/dropdown/dropdown-divider';
 import { DropdownItem } from '../base/dropdown/dropdown-item';
 import { showPrompt } from '../modals/index';
+
 const LOCALSTORAGE_KEY = 'insomnia.httpMethods';
 const GRPC_LABEL = 'gRPC';
 
 interface Props {
-  onChange: Function;
+  className?: string;
   method: string;
+  onChange: (method: string) => void;
   right?: boolean;
   showGrpc?: boolean;
-  className?: string;
 }
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class MethodDropdown extends PureComponent<Props> {
-  _dropdown: Dropdown | null = null;
+export const MethodDropdown = forwardRef<DropdownHandle, Props>(({
+  className,
+  method,
+  onChange,
+  right,
+  showGrpc,
+}, ref) => {
+  const localStorageHttpMethods = window.localStorage.getItem(LOCALSTORAGE_KEY);
+  const parsedLocalStorageHttpMethods = localStorageHttpMethods ? JSON.parse(localStorageHttpMethods) as string[] : [];
+  const [recent, setRecent] = useState(parsedLocalStorageHttpMethods);
 
-  _setDropdownRef(n: Dropdown) {
-    this._dropdown = n;
-  }
-
-  _handleSetCustomMethod() {
-    let recentMethods;
-
-    try {
-      const v = window.localStorage.getItem(LOCALSTORAGE_KEY);
-      // @ts-expect-error -- TSCONVERSION don't try parse if no item found
-      recentMethods = JSON.parse(v) || [];
-    } catch (err) {
-      recentMethods = [];
-    }
-
-    // Prompt user for the method
+  const handleSetCustomMethod = useCallback(() => {
     showPrompt({
-      defaultValue: this.props.method,
+      defaultValue: method,
       title: 'HTTP Method',
       submitName: 'Done',
       upperCase: true,
@@ -48,83 +40,76 @@ export class MethodDropdown extends PureComponent<Props> {
       hint: 'Common examples are LINK, UNLINK, FIND, PURGE',
       label: 'Name',
       placeholder: 'CUSTOM',
-      hints: recentMethods,
-      onDeleteHint: method => {
-        recentMethods = recentMethods.filter(m => m !== method);
-        window.localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(recentMethods));
+      hints: recent,
+      onDeleteHint: methodToDelete => {
+        // Note: We need to read and remove the method from localStorage and not rely on react state
+        // It solves the case where you try to delete more than one method at a time, because recent is updated only once
+        const localStorageHttpMethods = window.localStorage.getItem(LOCALSTORAGE_KEY);
+        const currentRecent = localStorageHttpMethods ? JSON.parse(localStorageHttpMethods) as string[] : [];
+        const newRecent = currentRecent.filter(m => m !== methodToDelete);
+        setRecent(newRecent);
+        window.localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(newRecent));
       },
-      onComplete: method => {
+      onComplete: methodToAdd => {
         // Don't add empty methods
-        if (!method) {
+        if (!methodToAdd) {
           return;
         }
-
         // Don't add base methods
-        if (constants.HTTP_METHODS.includes(method)) {
+        if (constants.HTTP_METHODS.includes(methodToAdd)) {
           return;
         }
 
+        // Note: We need to read and remove the method from localStorage and not rely on react state
+        // It solves the case where you try to add a new method after you deleted some others
+        const localStorageHttpMethods = window.localStorage.getItem(LOCALSTORAGE_KEY);
+        const currentRecent = localStorageHttpMethods ? JSON.parse(localStorageHttpMethods) as string[] : [];
         // Save method as recent
-        recentMethods = recentMethods.filter(m => m !== method);
-        recentMethods.unshift(method);
-        window.localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(recentMethods));
-        // Invoke callback
-        this.props.onChange(method);
+        if (!currentRecent.includes(methodToAdd)) {
+          const newRecent = [...currentRecent, methodToAdd];
+          setRecent(newRecent);
+          window.localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(newRecent));
+        }
+        onChange(methodToAdd);
       },
     });
-  }
+  }, [method, onChange, recent]);
 
-  _handleChange(method) {
-    this.props.onChange(method);
-  }
+  const buttonLabel = method === METHOD_GRPC ? GRPC_LABEL : method;
+  return (
+    <Dropdown ref={ref} className="method-dropdown" right={right}>
+      <DropdownButton className={className}>
+        <span className={`http-method-${method}`}>{buttonLabel}</span>{' '}
+        <i className="fa fa-caret-down space-left" />
+      </DropdownButton>
 
-  toggle() {
-    this._dropdown?.toggle(true);
-  }
-
-  render() {
-    const {
-      method,
-      right,
-      onChange,
-      // eslint-disable-line @typescript-eslint/no-unused-vars
-      showGrpc,
-      ...extraProps
-    } = this.props;
-    const buttonLabel = method === METHOD_GRPC ? GRPC_LABEL : method;
-    return (
-      <Dropdown ref={this._setDropdownRef} className="method-dropdown" right={right}>
-        <DropdownButton {...extraProps}>
-          <span className={`http-method-${method}`}>{buttonLabel}</span>{' '}
-          <i className="fa fa-caret-down space-left" />
-        </DropdownButton>
-        {constants.HTTP_METHODS.map(method => (
-          <DropdownItem
-            key={method}
-            className={`http-method-${method}`}
-            onClick={this._handleChange}
-            value={method}
-          >
-            {method}
-          </DropdownItem>
-        ))}
-        {showGrpc && (
-          <>
-            <DropdownDivider />
-            <DropdownItem className="method-grpc" onClick={this._handleChange} value={METHOD_GRPC}>
-              {GRPC_LABEL}
-            </DropdownItem>
-          </>
-        )}
-        <DropdownDivider />
+      {constants.HTTP_METHODS.map(method => (
         <DropdownItem
-          className="http-method-custom"
-          onClick={this._handleSetCustomMethod}
-          value={method}
+          key={method}
+          className={`http-method-${method}`}
+          onClick={() => onChange(method)}
         >
-          Custom Method
+          {method}
         </DropdownItem>
-      </Dropdown>
-    );
-  }
-}
+      ))}
+
+      {showGrpc && (
+        <>
+          <DropdownDivider />
+          <DropdownItem className="method-grpc" onClick={() => onChange(METHOD_GRPC)}>
+            {GRPC_LABEL}
+          </DropdownItem>
+        </>
+      )}
+
+      <DropdownDivider />
+      <DropdownItem
+        className="http-method-custom"
+        onClick={handleSetCustomMethod}
+      >
+        Custom Method
+      </DropdownItem>
+    </Dropdown>
+  );
+});
+MethodDropdown.displayName = 'MethodDropdown';

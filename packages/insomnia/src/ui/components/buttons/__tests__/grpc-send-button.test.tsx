@@ -1,7 +1,7 @@
+import { describe, expect, it, jest } from '@jest/globals';
 import { fireEvent, render } from '@testing-library/react';
 import React from 'react';
 
-import { GrpcMethodTypeEnum } from '../../../../network/grpc/method';
 import { GrpcSendButton } from '../grpc-send-button';
 
 describe('<GrpcSendButton />', () => {
@@ -26,7 +26,7 @@ describe('<GrpcSendButton />', () => {
         running={true}
         handleStart={jest.fn()}
         handleCancel={handleCancel}
-        methodType={GrpcMethodTypeEnum.unary}
+        methodType={'unary'}
       />,
     );
     const button = getByRole('button');
@@ -43,7 +43,7 @@ describe('<GrpcSendButton />', () => {
         running={false}
         handleStart={handleSend()}
         handleCancel={jest.fn()}
-        methodType={GrpcMethodTypeEnum.unary}
+        methodType={'unary'}
       />,
     );
     const button = getByRole('button');
@@ -53,7 +53,7 @@ describe('<GrpcSendButton />', () => {
     expect(handleSend).toHaveBeenCalled();
   });
 
-  it.each([GrpcMethodTypeEnum.bidi, GrpcMethodTypeEnum.server, GrpcMethodTypeEnum.client])(
+  it.each(['bidi', 'server', 'client'])(
     'should render start button if streaming RPC: %s',
     type => {
       const handleSend = jest.fn();

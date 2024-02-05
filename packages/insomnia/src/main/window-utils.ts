@@ -1,4 +1,4 @@
-import electron, { BrowserWindow, MenuItemConstructorOptions } from 'electron';
+import electron, { type BrowserWindow as ElectronBrowserWindow, type MenuItemConstructorOptions } from 'electron';
 import fs from 'fs';
 import * as os from 'os';
 import path from 'path';
@@ -19,14 +19,14 @@ import { clickLink, getDataDirectory } from '../common/electron-helpers';
 import * as log from '../common/log';
 import LocalStorage from './local-storage';
 
-const { app, Menu, shell, dialog, clipboard } = electron;
+const { app, Menu, shell, dialog, clipboard, BrowserWindow } = electron;
 
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 720;
 const MINIMUM_WIDTH = 500;
 const MINIMUM_HEIGHT = 400;
 
-let mainWindow: BrowserWindow | null = null;
+let mainWindow: ElectronBrowserWindow | null = null;
 let localStorage: LocalStorage | null = null;
 
 interface Bounds {
@@ -103,18 +103,19 @@ export function createWindow() {
   });
 
   // Open generic links (<a .../>) in default browser
-  mainWindow?.webContents.on('will-navigate', (e, url) => {
-    if (url === appUrl) {
+  mainWindow?.webContents.on('will-navigate', (event, url) => {
+    // Prevents local dev full-reload events from opening browser window, see https://github.com/Kong/insomnia/pull/4925
+    if (url.startsWith(appUrl)) {
       return;
     }
 
     console.log('[app] Navigate to ' + url);
-    e.preventDefault();
+    event.preventDefault();
     clickLink(url);
   });
 
-  mainWindow?.webContents.on('new-window', e => {
-    e.preventDefault();
+  mainWindow?.webContents.setWindowOpenHandler(() => {
+    return { action: 'deny' };
   });
 
   // Load the html of the app.
@@ -549,9 +550,9 @@ function getBounds() {
     bounds = localStorage?.getItem('bounds', {});
     fullscreen = localStorage?.getItem('fullscreen', false);
     maximize = localStorage?.getItem('maximize', false);
-  } catch (e) {
+  } catch (error) {
     // This should never happen, but if it does...!
-    console.error('Failed to parse window bounds', e);
+    console.error('Failed to parse window bounds', error);
   }
 
   return {
@@ -568,16 +569,16 @@ const ZOOM_MIN = 0.05;
 const getZoomFactor = () => {
   try {
     return localStorage?.getItem('zoomFactor', ZOOM_DEFAULT);
-  } catch (e) {
+  } catch (error) {
     // This should never happen, but if it does...!
-    console.error('Failed to parse zoomFactor', e);
+    console.error('Failed to parse zoomFactor', error);
   }
 
   return ZOOM_DEFAULT;
 };
 
 export const setZoom = (transformer: (current: number) => number) => () => {
-  const browserWindow = electron.BrowserWindow.getFocusedWindow();
+  const browserWindow = BrowserWindow.getFocusedWindow();
 
   if (!browserWindow || !browserWindow.webContents) {
     return;

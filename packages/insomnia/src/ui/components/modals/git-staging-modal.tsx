@@ -1,26 +1,19 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
 import classnames from 'classnames';
-import path from 'path';
-import React, { Fragment, PureComponent } from 'react';
-import YAML from 'yaml';
+import React, { FC, useEffect, useRef } from 'react';
+import { OverlayContainer } from 'react-aria';
+import { useFetcher, useParams } from 'react-router-dom';
 
-import { SegmentEvent, trackSegmentEvent, vcsSegmentEventProperties } from '../../../common/analytics';
-import { AUTOBIND_CFG } from '../../../common/constants';
-import { database as db } from '../../../common/database';
 import { strings } from '../../../common/strings';
 import * as models from '../../../models';
-import { isApiSpec } from '../../../models/api-spec';
-import type { Workspace } from '../../../models/workspace';
-import { gitRollback } from '../../../sync/git/git-rollback';
-import { GIT_INSOMNIA_DIR, GIT_INSOMNIA_DIR_NAME, GitVCS } from '../../../sync/git/git-vcs';
-import parseGitPath from '../../../sync/git/parse-git-path';
+import { CommitToGitRepoResult, GitChange, GitRollbackChangesResult } from '../../routes/git-actions';
 import { IndeterminateCheckbox } from '../base/indeterminate-checkbox';
-import { Modal } from '../base/modal';
+import { type ModalHandle, Modal, ModalProps } from '../base/modal';
 import { ModalBody } from '../base/modal-body';
 import { ModalFooter } from '../base/modal-footer';
 import { ModalHeader } from '../base/modal-header';
 import { PromptButton } from '../base/prompt-button';
 import { Tooltip } from '../tooltip';
+import { showAlert } from '.';
 
 interface Item {
   path: string;
@@ -31,428 +24,344 @@ interface Item {
   editable: boolean;
 }
 
-interface Props {
-  workspace: Workspace;
-  vcs: GitVCS;
-}
-
-interface State {
-  loading: boolean;
+type Props = ModalProps & {
+  changes: GitChange[];
   branch: string;
-  message: string;
-  items: Record<string, Item>;
-}
-
-const INITIAL_STATE: State = {
-  loading: false,
-  branch: '',
-  message: '',
-  items: {},
+  statusNames: Record<string, string>;
 };
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class GitStagingModal extends PureComponent<Props, State> {
-  modal: Modal | null = null;
-  statusNames: Record<string, string>;
-  textarea: HTMLTextAreaElement | null = null;
-  onCommit: null | (() => void);
+export const GitStagingModal: FC<Props> = ({
+  changes,
+  branch,
+  statusNames,
+  onHide,
+}) => {
+  const { organizationId, projectId, workspaceId } = useParams() as {
+    organizationId: string;
+    projectId: string;
+    workspaceId: string;
+  };
+  const modalRef = useRef<ModalHandle>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [checkAllModified, setCheckAllModified] = React.useState(false);
+  const [checkAllUnversioned, setCheckAllUnversioned] = React.useState(false);
 
-  constructor(props: Props) {
-    super(props);
-    this.state = INITIAL_STATE;
-    this.onCommit = null;
-  }
+  const gitCommitFetcher = useFetcher<CommitToGitRepoResult>();
+  const rollbackFetcher = useFetcher<GitRollbackChangesResult>();
 
-  _setModalRef(ref: Modal) {
-    this.modal = ref;
-  }
+  useEffect(() => {
+    modalRef.current?.show();
+  }, []);
 
-  _setTextareaRef(ref: HTMLTextAreaElement) {
-    this.textarea = ref;
-  }
+  const hasChanges = Boolean(changes.length);
 
-  async _handleMessageChange(e: React.SyntheticEvent<HTMLTextAreaElement>) {
-    this.setState({
-      message: e.currentTarget.value,
-    });
-  }
+  const modifiedChanges = changes.filter(i => !i.status.includes('added'));
+  const unversionedChanges = changes.filter(i => i.status.includes('added'));
 
-  async _handleCommit() {
-    const { vcs } = this.props;
-    const { items, message } = this.state;
+  const errors = gitCommitFetcher.data?.errors || rollbackFetcher.data?.errors;
 
-    // Set the stage
-    for (const p of Object.keys(items)) {
-      const item = items[p];
-
-      if (!item.staged) {
-        continue;
-      }
-
-      if (item.status.includes('deleted')) {
-        await vcs.remove(item.path);
-      } else {
-        await vcs.add(item.path);
-      }
+  useEffect(() => {
+    if (errors && errors?.length > 0) {
+      showAlert({
+        title: 'Push Failed',
+        message: errors.join('\n'),
+      });
     }
+  }, [errors]);
 
-    await vcs.commit(message);
-    trackSegmentEvent(SegmentEvent.vcsAction, vcsSegmentEventProperties('git', 'commit'));
-    this.modal?.hide();
-
-    if (typeof this.onCommit === 'function') {
-      this.onCommit();
-    }
-  }
-
-  _hideModal() {
-    this.modal?.hide();
-  }
-
-  async _toggleAll(items: Item[], forceAdd = false) {
-    const allStaged = items.every(i => i.staged);
-    const doStage = !allStaged;
-    const newItems = { ...this.state.items };
-
-    for (const { path: p } of items) {
-      if (!newItems[p].editable) {
-        continue;
-      }
-
-      newItems[p].staged = doStage || forceAdd;
-    }
-
-    trackSegmentEvent(SegmentEvent.vcsAction, vcsSegmentEventProperties('git', doStage ? 'stage_all' : 'unstage_all'));
-    this.setState({
-      items: newItems,
-    });
-  }
-
-  async _handleToggleOne(e: React.SyntheticEvent<HTMLInputElement>) {
-    const newItems = { ...this.state.items };
-    const gitPath = e.currentTarget.name;
-
-    if (!newItems[gitPath] || !newItems[gitPath].editable) {
-      return;
-    }
-
-    newItems[gitPath].staged = !newItems[gitPath].staged;
-    trackSegmentEvent(SegmentEvent.vcsAction, vcsSegmentEventProperties('git', newItems[gitPath].staged ? 'stage' : 'unstage'));
-    this.setState({
-      items: newItems,
-    });
-  }
-
-  async getAllPaths(): Promise<string[]> {
-    const { vcs } = this.props;
-    // @ts-expect-error -- TSCONVERSION
-    const f = vcs.getFs().promises;
-    const fsPaths: string[] = [];
-
-    for (const type of await f.readdir(GIT_INSOMNIA_DIR)) {
-      const typeDir = path.join(GIT_INSOMNIA_DIR, type);
-
-      for (const name of await f.readdir(typeDir)) {
-        // NOTE: git paths don't start with '/' so we're omitting
-        //  it here too.
-        const gitPath = path.join(GIT_INSOMNIA_DIR_NAME, type, name);
-        fsPaths.push(path.join(gitPath));
-      }
-    }
-
-    // To get all possible paths, we need to combine the paths already in Git
-    // with the paths on the FS. This is required to cover the case where a
-    // file can be deleted from FS or from Git.
-    const gitPaths = await vcs.listFiles();
-    const uniquePaths = new Set([...fsPaths, ...gitPaths]);
-    return Array.from(uniquePaths).sort();
-  }
-
-  async show(options: { onCommit?: () => void }) {
-    this.onCommit = options.onCommit || null;
-    this.modal?.show();
-    // Reset state
-    this.setState(INITIAL_STATE);
-    await this._refresh(() => {
-      this.textarea?.focus();
-    });
-  }
-
-  async _refresh(callback?: () => void) {
-    const { vcs, workspace } = this.props;
-    this.setState({
-      loading: true,
-    });
-    // Get and set branch name
-    const branch = await vcs.getBranch();
-    this.setState({
-      branch,
-    });
-    // Cache status names
-    const docs = await db.withDescendants(workspace);
-    const allPaths = await this.getAllPaths();
-    this.statusNames = {};
-
-    for (const doc of docs) {
-      const name = (isApiSpec(doc) && doc.fileName) || doc.name || '';
-      this.statusNames[path.join(GIT_INSOMNIA_DIR_NAME, doc.type, `${doc._id}.json`)] = name;
-      this.statusNames[path.join(GIT_INSOMNIA_DIR_NAME, doc.type, `${doc._id}.yml`)] = name;
-    }
-
-    // Create status items
-    const items = {};
-    const log = (await vcs.log(1)) || [];
-
-    for (const gitPath of allPaths) {
-      const status = await vcs.status(gitPath);
-
-      if (status === 'unmodified') {
-        continue;
-      }
-
-      if (!this.statusNames[gitPath] && log.length > 0) {
-        const docYML = await vcs.readObjFromTree(log[0].commit.tree, gitPath);
-
-        if (!docYML) {
-          continue;
-        }
-
-        try {
-          // @ts-expect-error -- TSCONVERSION
-          const doc = YAML.parse(docYML);
-          this.statusNames[gitPath] = doc.name || '';
-        } catch (err) {
-          // Nothing here
-        }
-      }
-
-      // We know that type is in the path; extract it. If the model is not found, set to Unknown.
-      let { type } = parseGitPath(gitPath);
-
-      // @ts-expect-error -- TSCONVERSION
-      if (!models.types().includes(type)) {
-        type = 'Unknown';
-      }
-
-      const added = status.includes('added');
-      let staged = !added;
-      let editable = true;
-
-      // We want to enforce that workspace changes are always committed because otherwise
-      // others won't be able to clone from it. We also make fundamental migrations to the
-      // scope property which need to be committed.
-      // So here we're preventing people from un-staging the workspace.
-      if (type === models.workspace.type) {
-        editable = false;
-        staged = true;
-      }
-
-      items[gitPath] = {
-        type,
-        staged,
-        editable,
-        status,
-        added,
-        path: gitPath,
-      };
-    }
-
-    this.setState(
-      {
-        items,
-        loading: false,
-      },
-      callback,
-    );
-  }
-
-  renderOperation(item: Item) {
-    let child: JSX.Element | null = null;
-    let message = '';
-    let type = item.type;
-
-    if (item.status.includes('added')) {
-      child = <i className="fa fa-plus-circle success" />;
-      message = 'Added';
-    } else if (item.status.includes('modified')) {
-      child = <i className="fa fa-circle faded" />;
-      message = 'Modified';
-    } else if (item.status.includes('deleted')) {
-      child = <i className="fa fa-minus-circle danger" />;
-      message = 'Deleted';
-    } else {
-      child = <i className="fa fa-question-circle info" />;
-      message = 'Unknown';
-    }
-
-    if (type === models.workspace.type) {
-      type = strings.document.singular;
-    }
-
-    return (
-      <Fragment>
-        <Tooltip message={message}>
-          {child} {type}
-        </Tooltip>
-      </Fragment>
-    );
-  }
-
-  async _handleRollback(items: Item[]) {
-    const { vcs } = this.props;
-    const files = items
-      .filter(i => i.editable) // only rollback if editable
-      .map(i => ({
-        filePath: i.path,
-        status: i.status,
-      }));
-    await gitRollback(vcs, files);
-    await this._refresh();
-  }
-
-  async _handleRollbackSingle(item: Item) {
-    await this._handleRollback([item]);
-    trackSegmentEvent(SegmentEvent.vcsAction, vcsSegmentEventProperties('git', 'rollback'));
-  }
-
-  async _handleRollbackAll(items: Item[]) {
-    await this._handleRollback(items);
-    trackSegmentEvent(SegmentEvent.vcsAction, vcsSegmentEventProperties('git', 'rollback_all'));
-  }
-
-  renderItem(item: Item) {
-    const { path: gitPath, staged, editable } = item;
-    const docName = this.statusNames[gitPath] || 'n/a';
-    return (
-      <tr key={gitPath} className="table--no-outline-row">
-        <td>
-          <label className="no-pad wide">
-            <input
-              disabled={!editable}
-              className="space-right"
-              type="checkbox"
-              checked={staged}
-              name={gitPath}
-              onChange={this._handleToggleOne}
-            />{' '}
-            {docName}
-          </label>
-        </td>
-        <td className="text-right">
-          {item.editable && <Tooltip message={item.added ? 'Delete' : 'Rollback'}>
-            <button
-              className="btn btn--micro space-right"
-              onClick={() => this._handleRollbackSingle(item)}
-            >
-              <i className={classnames('fa', item.added ? 'fa-trash' : 'fa-undo')} />
-            </button>
-          </Tooltip>}
-          {this.renderOperation(item)}
-        </td>
-      </tr>
-    );
-  }
-
-  renderTable(title: string, items: Item[], rollbackLabel: string) {
-    if (items.length === 0) {
-      return null;
-    }
-
-    const allStaged = items.every(i => i.staged);
-    const allUnstaged = items.every(i => !i.staged);
-    return (
-      <div className="pad-top">
-        <strong>{title}</strong>
-        <PromptButton
-          className="btn pull-right btn--micro"
-          onClick={() => this._handleRollbackAll(items)}
-        >
-          {rollbackLabel}
-        </PromptButton>
-        <table className="table--fancy table--outlined margin-top-sm">
-          <thead>
-            <tr className="table--no-outline-row">
-              <th>
-                <label className="wide no-pad">
-                  <span className="txt-md">
-                    <IndeterminateCheckbox
-                      className="space-right"
-                      // @ts-expect-error -- TSCONVERSION
-                      type="checkbox"
-                      checked={allStaged}
-                      onChange={() => this._toggleAll(items, !allStaged)}
-                      indeterminate={!allStaged && !allUnstaged}
-                    />
-                  </span>{' '}
-                  name
-                </label>
-              </th>
-              <th className="text-right">Description</th>
-            </tr>
-          </thead>
-          <tbody>{items.map(this.renderItem)}</tbody>
-        </table>
-      </div>
-    );
-  }
-
-  _renderEmpty() {
-    const { loading } = this.state;
-
-    if (loading) {
-      return <>Loading...</>;
-    }
-
-    return <>No changes to commit.</>;
-  }
-
-  _renderItems(items: Item[]) {
-    const { message } = this.state;
-    const newItems = items.filter(i => i.status.includes('added'));
-    const existingItems = items.filter(i => !i.status.includes('added'));
-    return (
-      <>
-        <div className="form-control form-control--outlined">
-          <textarea
-            ref={this._setTextareaRef}
-            rows={3}
-            required
-            placeholder="A descriptive message to describe changes made"
-            defaultValue={message}
-            onChange={this._handleMessageChange}
-          />
-        </div>
-        {this.renderTable('Modified Objects', existingItems, 'Rollback all')}
-        {this.renderTable('Unversioned Objects', newItems, 'Delete all')}
-      </>
-    );
-  }
-
-  render() {
-    const { items, branch, loading } = this.state;
-    const itemsList = Object.keys(items).map(k => items[k]);
-    const hasChanges = !!itemsList.length;
-    return (
-      <Modal ref={this._setModalRef}>
+  return (
+    <OverlayContainer>
+      <Modal onHide={onHide} ref={modalRef}>
         <ModalHeader>Commit Changes</ModalHeader>
         <ModalBody className="wide pad">
-          {hasChanges ? this._renderItems(itemsList) : this._renderEmpty()}
+          <gitCommitFetcher.Form
+            id="git-staging-form"
+            method="post"
+            ref={formRef}
+            action={`/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/commit`}
+          >
+            {hasChanges ? (
+              <>
+                <div className="form-control form-control--outlined">
+                  <textarea
+                    rows={3}
+                    required
+                    placeholder="A descriptive message to describe changes made"
+                    name="message"
+                  />
+                </div>
+                {modifiedChanges.length > 0 && (
+                  <div className="pad-top">
+                    <strong>Modified Objects</strong>
+                    <PromptButton
+                      className="btn pull-right btn--micro"
+                      onClick={e => {
+                        e.preventDefault();
+                        if (formRef.current) {
+                          const data = new FormData(formRef.current);
+                          data.append('changeType', 'modified');
+
+                          rollbackFetcher.submit(data, {
+                            action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/rollback`,
+                            method: 'post',
+                          });
+                        }
+                      }}
+                    >
+                      Rollback All
+                    </PromptButton>
+                    <table className="table--fancy table--outlined margin-top-sm">
+                      <thead>
+                        <tr className="table--no-outline-row">
+                          <th>
+                            <label className="wide no-pad">
+                              <span className="txt-md">
+                                <IndeterminateCheckbox
+                                  className="space-right"
+                                  // @ts-expect-error -- TSCONVERSION
+                                  type="checkbox"
+                                  checked={checkAllModified}
+                                  name="allModified"
+                                  onChange={() =>
+                                    setCheckAllModified(!checkAllModified)
+                                  }
+                                  indeterminate={!checkAllModified}
+                                />
+                              </span>{' '}
+                              name
+                            </label>
+                          </th>
+                          <th className="text-right">Description</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {modifiedChanges.map(item => (
+                          <tr key={item.path} className="table--no-outline-row">
+                            <td>
+                              <label className="no-pad wide">
+                                <input
+                                  disabled={!item.editable || checkAllModified}
+                                  className="space-right"
+                                  type="checkbox"
+                                  {...(checkAllModified
+                                    ? { checked: true }
+                                    : {})}
+                                  defaultChecked={item.staged}
+                                  value={item.path}
+                                  name="paths"
+                                />{' '}
+                                {statusNames?.[item.path] || 'n/a'}
+                              </label>
+                            </td>
+                            <td className="text-right">
+                              {item.editable && (
+                                <Tooltip
+                                  message={item.added ? 'Delete' : 'Rollback'}
+                                >
+                                  <button
+                                    className="btn btn--micro space-right"
+                                    onClick={e => {
+                                      e.preventDefault();
+                                      if (formRef.current) {
+                                        const data = new FormData(
+                                          formRef.current
+                                        );
+                                        data.append('changeType', 'modified');
+                                        data.delete('paths');
+                                        data.append('paths', item.path);
+
+                                        rollbackFetcher.submit(data, {
+                                          action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/rollback`,
+                                          method: 'post',
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    <i
+                                      className={classnames(
+                                        'fa',
+                                        item.added ? 'fa-trash' : 'fa-undo'
+                                      )}
+                                    />
+                                  </button>
+                                </Tooltip>
+                              )}
+                              <OperationTooltip item={item} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {unversionedChanges.length > 0 && (
+                  <div className="pad-top">
+                    <strong>Unversioned Objects</strong>
+                    <PromptButton
+                      className="btn pull-right btn--micro"
+                      onClick={e => {
+                        e.preventDefault();
+                        if (formRef.current) {
+                          const data = new FormData(formRef.current);
+                          data.append('changeType', 'unversioned');
+
+                          rollbackFetcher.submit(data, {
+                            action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/rollback`,
+                            method: 'post',
+                          });
+                        }
+                      }}
+                    >
+                      Delete All
+                    </PromptButton>
+                    <table className="table--fancy table--outlined margin-top-sm">
+                      <thead>
+                        <tr className="table--no-outline-row">
+                          <th>
+                            <label className="wide no-pad">
+                              <span className="txt-md">
+                                <IndeterminateCheckbox
+                                  className="space-right"
+                                  // @ts-expect-error -- TSCONVERSION
+                                  type="checkbox"
+                                  name="allUnversioned"
+                                  checked={checkAllUnversioned}
+                                  onChange={() =>
+                                    setCheckAllUnversioned(!checkAllUnversioned)
+                                  }
+                                  indeterminate={!checkAllUnversioned}
+                                />
+                              </span>{' '}
+                              name
+                            </label>
+                          </th>
+                          <th className="text-right">Description</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {unversionedChanges.map(item => (
+                          <tr key={item.path} className="table--no-outline-row">
+                            <td>
+                              <label className="no-pad wide">
+                                <input
+                                  disabled={
+                                    !item.editable || checkAllUnversioned
+                                  }
+                                  className="space-right"
+                                  type="checkbox"
+                                  value={item.path}
+                                  name="paths"
+                                  {...(checkAllUnversioned
+                                    ? { checked: true }
+                                    : {})}
+                                  defaultChecked={item.staged}
+                                />{' '}
+                                {statusNames?.[item.path] || 'n/a'}
+                              </label>
+                            </td>
+                            <td className="text-right">
+                              {item.editable && (
+                                <Tooltip
+                                  message={item.added ? 'Delete' : 'Rollback'}
+                                >
+                                  <button
+                                    className="btn btn--micro space-right"
+                                    onClick={e => {
+                                      e.preventDefault();
+                                      if (formRef.current) {
+                                        const data = new FormData(
+                                          formRef.current
+                                        );
+                                        data.append(
+                                          'changeType',
+                                          'unversioned'
+                                        );
+                                        data.delete('paths');
+                                        data.append('paths', item.path);
+
+                                        rollbackFetcher.submit(data, {
+                                          action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/rollback`,
+                                          method: 'post',
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    <i
+                                      className={classnames(
+                                        'fa',
+                                        item.added ? 'fa-trash' : 'fa-undo'
+                                      )}
+                                    />
+                                  </button>
+                                </Tooltip>
+                              )}
+                              <OperationTooltip item={item} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>No changes to commit.</>
+            )}
+          </gitCommitFetcher.Form>
         </ModalBody>
         <ModalFooter>
           <div className="margin-left italic txt-sm">
             <i className="fa fa-code-fork" /> {branch}{' '}
-            {loading && <i className="fa fa-refresh fa-spin" />}
           </div>
           <div>
-            <button className="btn" onClick={this._hideModal}>
+            <button className="btn" onClick={() => modalRef.current?.hide()}>
               Close
             </button>
-            <button className="btn" onClick={this._handleCommit} disabled={loading || !hasChanges}>
+            <button
+              type="submit"
+              form="git-staging-form"
+              className="btn"
+              disabled={gitCommitFetcher.state === 'submitting' || !hasChanges}
+            >
               Commit
             </button>
           </div>
         </ModalFooter>
       </Modal>
+    </OverlayContainer>
+  );
+};
+
+GitStagingModal.displayName = 'GitStagingModal';
+
+const OperationTooltip = ({ item }: { item: Item }) => {
+  const type =
+    item.type === models.workspace.type ? strings.document.singular : item.type;
+  if (item.status.includes('added')) {
+    return (
+      <Tooltip message="Added">
+        <i className="fa fa-plus-circle success" /> {type}
+      </Tooltip>
     );
   }
-}
+  if (item.status.includes('modified')) {
+    return (
+      <Tooltip message="Modified">
+        <i className="fa fa-plus-circle faded" /> {type}
+      </Tooltip>
+    );
+  }
+  if (item.status.includes('deleted')) {
+    return (
+      <Tooltip message="Deleted">
+        <i className="fa fa-minus-circle danger" /> {type}
+      </Tooltip>
+    );
+  }
+  return (
+    <Tooltip message="Unknown">
+      <i className="fa fa-question-circle info" /> {type}
+    </Tooltip>
+  );
+};

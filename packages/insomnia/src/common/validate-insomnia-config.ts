@@ -1,4 +1,5 @@
 import { getConfigSettings, isConfigError, isParseError } from '../models/helpers/settings';
+import { ErrorResult } from '../utils/config/validate';
 
 interface Result {
   error?:{
@@ -30,7 +31,7 @@ export const validateInsomniaConfig = (): Result => {
     ].join('\n');
   } else if (isConfigError(configSettings)) {
     const { humanReadableErrors, configPath } = configSettings.error;
-    const errors = humanReadableErrors.map(({ message, path, suggestion }, index) => ([
+    const errors = humanReadableErrors.map(({ message, path, suggestion }: ErrorResult['humanReadableErrors'][0], index: number) => ([
       `[Error ${index + 1}]`,
       `Path: ${path}`,
       `${message}.${suggestion ? `  ${suggestion}` : ''}`,

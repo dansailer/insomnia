@@ -1,12 +1,5 @@
 import clone from 'clone';
 import fs from 'fs';
-import { cookiesFromJar, jarFromCookies } from 'insomnia-cookies';
-import {
-  buildQueryStringFromParams,
-  joinUrlAndQueryString,
-  setDefaultProtocol,
-  smartEncodeUrl,
-} from 'insomnia-url';
 import mkdirp from 'mkdirp';
 import { join as pathJoin } from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -14,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   STATUS_CODE_PLUGIN_ERROR,
 } from '../common/constants';
+import { cookiesFromJar, jarFromCookies } from '../common/cookies';
 import { database as db } from '../common/database';
 import { getDataDirectory } from '../common/electron-helpers';
 import {
@@ -28,47 +22,32 @@ import {
   RENDER_PURPOSE_NO_RENDER,
   RENDER_PURPOSE_SEND,
 } from '../common/render';
+import type { ResponsePatch, ResponseTimelineEntry } from '../main/network/libcurl-promise';
 import * as models from '../models';
-import { ClientCertificate } from '../models/client-certificate';
+import { Cookie, CookieJar } from '../models/cookie-jar';
 import type { Environment } from '../models/environment';
 import type { Request } from '../models/request';
-import type { ResponseHeader, ResponseTimelineEntry } from '../models/response';
 import type { Settings } from '../models/settings';
 import { isWorkspace } from '../models/workspace';
 import * as pluginContexts from '../plugins/context/index';
 import * as plugins from '../plugins/index';
-import { getAuthHeader } from './authentication';
+import { setDefaultProtocol } from '../utils/url/protocol';
+import {
+  buildQueryStringFromParams,
+  joinUrlAndQueryString,
+  smartEncodeUrl,
+} from '../utils/url/querystring';
+import { getAuthHeader, getAuthQueryParams } from './authentication';
 import { urlMatchesCertHost } from './url-matches-cert-host';
-
-export interface ResponsePatch {
-  bodyCompression?: 'zip' | null;
-  bodyPath?: string;
-  bytesContent?: number;
-  bytesRead?: number;
-  contentType?: string;
-  elapsedTime: number;
-  environmentId?: string | null;
-  error?: string;
-  headers?: ResponseHeader[];
-  httpVersion?: string;
-  message?: string;
-  parentId?: string;
-  settingSendCookies?: boolean;
-  settingStoreCookies?: boolean;
-  statusCode?: number;
-  statusMessage?: string;
-  timelinePath?: string;
-  url?: string;
-}
 
 // Time since user's last keypress to wait before making the request
 const MAX_DELAY_TIME = 1000;
 
-const cancelRequestFunctionMap = {};
+const cancelRequestFunctionMap: Record<string, () => void> = {};
 
 let lastUserInteraction = Date.now();
 
-export async function cancelRequestById(requestId) {
+export async function cancelRequestById(requestId: string) {
   const hasCancelFunction = cancelRequestFunctionMap.hasOwnProperty(requestId) && typeof cancelRequestFunctionMap[requestId] === 'function';
   if (hasCancelFunction) {
     return cancelRequestFunctionMap[requestId]();
@@ -78,7 +57,7 @@ export async function cancelRequestById(requestId) {
 
 export async function _actuallySend(
   renderedRequest: RenderedRequest,
-  clientCertificates: ClientCertificate[],
+  workspaceId: string,
   settings: Settings,
 ) {
   return new Promise<ResponsePatch>(async resolve => {
@@ -95,8 +74,8 @@ export async function _actuallySend(
         // NOTE: conditionally use ipc bridge, renderer cannot import native modules directly
         const nodejsCancelCurlRequest = process.type === 'renderer'
           ? window.main.cancelCurlRequest
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          : require('./libcurl-promise').cancelCurlRequest;
+          : (await import('../main/network/libcurl-promise')).cancelCurlRequest;
+
         nodejsCancelCurlRequest(renderedRequest._id);
         return resolve({
           elapsedTime: 0,
@@ -107,8 +86,13 @@ export async function _actuallySend(
           timelinePath,
         });
       };
+      const authQueryParam = await getAuthQueryParams(renderedRequest);
       // Set the URL, including the query parameters
-      const qs = buildQueryStringFromParams(renderedRequest.parameters);
+      const qs = buildQueryStringFromParams(
+        authQueryParam
+          ? renderedRequest.parameters.concat([authQueryParam])
+          : renderedRequest.parameters
+      );
       const url = joinUrlAndQueryString(renderedRequest.url, qs);
       const isUnixSocket = url.match(/https?:\/\/unix:\//);
       let finalUrl, socketPath;
@@ -122,23 +106,24 @@ export async function _actuallySend(
         const socketUrl = (match && match[3]) || '';
         finalUrl = `${protocol}//${socketUrl}`;
       }
-      timeline.push({ value: `Preparing request to ${finalUrl}`, name: 'TEXT', timestamp: Date.now() });
-      timeline.push({ value: `Current time is ${new Date().toISOString()}`, name: 'TEXT', timestamp: Date.now() });
-      timeline.push({ value: `${renderedRequest.settingEncodeUrl ? 'Enable' : 'Disable'} automatic URL encoding`, name: 'TEXT', timestamp: Date.now() });
+      timeline.push({ value: `Preparing request to ${finalUrl}`, name: 'Text', timestamp: Date.now() });
+      timeline.push({ value: `Current time is ${new Date().toISOString()}`, name: 'Text', timestamp: Date.now() });
+      timeline.push({ value: `${renderedRequest.settingEncodeUrl ? 'Enable' : 'Disable'} automatic URL encoding`, name: 'Text', timestamp: Date.now() });
 
       if (!renderedRequest.settingSendCookies) {
-        timeline.push({ value: 'Disable cookie sending due to user setting', name: 'TEXT', timestamp: Date.now() });
+        timeline.push({ value: 'Disable cookie sending due to user setting', name: 'Text', timestamp: Date.now() });
       }
-
+      const clientCertificates = await models.clientCertificate.findByParentId(workspaceId);
       const certificates = clientCertificates.filter(c => !c.disabled && urlMatchesCertHost(setDefaultProtocol(c.host, 'https:'), renderedRequest.url));
-
+      const caCert = await models.caCertificate.findByParentId(workspaceId);
+      const caCertficatePath = caCert?.disabled === false ? caCert.path : null;
       const authHeader = await getAuthHeader(renderedRequest, finalUrl);
 
       // NOTE: conditionally use ipc bridge, renderer cannot import native modules directly
       const nodejsCurlRequest = process.type === 'renderer'
         ? window.main.curlRequest
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        : require('./libcurl-promise').curlRequest;
+        : (await import('../main/network/libcurl-promise')).curlRequest;
+
       const requestOptions = {
         requestId: renderedRequest._id,
         req: renderedRequest,
@@ -146,6 +131,7 @@ export async function _actuallySend(
         socketPath,
         settings,
         certificates,
+        caCertficatePath,
         authHeader,
       };
       const { patch, debugTimeline, headerResults, responseBodyPath } = await nodejsCurlRequest(requestOptions);
@@ -154,17 +140,18 @@ export async function _actuallySend(
       // add set-cookie headers to file(cookiejar) and database
       if (settingStoreCookies) {
         // supports many set-cookies over many redirects
-        const redirects: string[][] = headerResults.map(({ headers }) => getSetCookiesFromResponseHeaders(headers));
+        const redirects: string[][] = headerResults.map(({ headers }: any) => getSetCookiesFromResponseHeaders(headers));
         const setCookieStrings: string[] = redirects.flat();
         const totalSetCookies = setCookieStrings.length;
         if (totalSetCookies) {
           const currentUrl = getCurrentUrl({ headerResults, finalUrl });
           const { cookies, rejectedCookies } = await addSetCookiesToToughCookieJar({ setCookieStrings, currentUrl, cookieJar });
-          rejectedCookies.forEach(errorMessage => timeline.push({ value: `Rejected cookie: ${errorMessage}`, name: 'TEXT', timestamp: Date.now() }));
+          rejectedCookies.forEach(errorMessage => timeline.push({ value: `Rejected cookie: ${errorMessage}`, name: 'Text', timestamp: Date.now() }));
           const hasCookiesToPersist = totalSetCookies > rejectedCookies.length;
           if (hasCookiesToPersist) {
-            await models.cookieJar.update(cookieJar, { cookies });
-            timeline.push({ value: `Saved ${totalSetCookies} cookies`, name: 'TEXT', timestamp: Date.now() });
+            const patch: Partial<CookieJar> = { cookies };
+            await models.cookieJar.update(cookieJar, patch);
+            timeline.push({ value: `Saved ${totalSetCookies} cookies`, name: 'Text', timestamp: Date.now() });
           }
         }
       }
@@ -206,9 +193,9 @@ export async function _actuallySend(
   });
 }
 
-export const getSetCookiesFromResponseHeaders = headers => getSetCookieHeaders(headers).map(h => h.value);
+export const getSetCookiesFromResponseHeaders = (headers: any[]) => getSetCookieHeaders(headers).map(h => h.value);
 
-export const getCurrentUrl = ({ headerResults, finalUrl }) => {
+export const getCurrentUrl = ({ headerResults, finalUrl }: { headerResults: any; finalUrl: string }): string => {
   if (!headerResults || !headerResults.length) {
     return finalUrl;
   }
@@ -224,7 +211,7 @@ export const getCurrentUrl = ({ headerResults, finalUrl }) => {
   }
 };
 
-const addSetCookiesToToughCookieJar = async ({ setCookieStrings, currentUrl, cookieJar }) => {
+export const addSetCookiesToToughCookieJar = async ({ setCookieStrings, currentUrl, cookieJar }: any) => {
   const rejectedCookies: string[] = [];
   const jar = jarFromCookies(cookieJar.cookies);
   for (const setCookieStr of setCookieStrings) {
@@ -236,7 +223,7 @@ const addSetCookiesToToughCookieJar = async ({ setCookieStrings, currentUrl, coo
       }
     }
   }
-  const cookies = await cookiesFromJar(jar);
+  const cookies = (await cookiesFromJar(jar)) as Cookie[];
   return { cookies, rejectedCookies };
 };
 
@@ -283,10 +270,9 @@ export async function sendWithSettings(
   const environment: Environment | null = await models.environment.getById(environmentId || 'n/a');
   const responseEnvironmentId = environment ? environment._id : null;
 
-  const clientCertificates = await models.clientCertificate.findByParentId(workspace._id);
   const response = await _actuallySend(
     renderResult.request,
-    clientCertificates,
+    workspace._id,
     { ...settings, validateSSL: settings.validateAuthSSL },
   );
   response.parentId = renderResult.request._id;
@@ -378,10 +364,9 @@ export async function send(
       url: renderedRequestBeforePlugins.url,
     } as ResponsePatch;
   }
-  const clientCertificates = await models.clientCertificate.findByParentId(workspace._id);
   const response = await _actuallySend(
     renderedRequest,
-    clientCertificates,
+    workspace._id,
     settings,
   );
   response.parentId = renderResult.request._id;
@@ -472,7 +457,7 @@ async function _applyResponsePluginHooks(
 
 }
 
-function storeTimeline(timeline: ResponseTimelineEntry[]) {
+export function storeTimeline(timeline: ResponseTimelineEntry[]): Promise<string> {
   const timelineStr = JSON.stringify(timeline, null, '\t');
   const timelineHash = uuidv4();
   const responsesDir = pathJoin(getDataDirectory(), 'responses');
@@ -492,8 +477,8 @@ function storeTimeline(timeline: ResponseTimelineEntry[]) {
 }
 
 if (global.document) {
-  document.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.ctrlKey || e.metaKey || e.altKey) {
+  document.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) {
       return;
     }
 

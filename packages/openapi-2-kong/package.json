@@ -1,7 +1,8 @@
 {
+  "private": true,
   "name": "openapi-2-kong",
   "license": "Apache-2.0",
-  "version": "3.1.0-beta.0",
+  "version": "3.7.0",
   "author": "Kong <office@konghq.com>",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,20 +13,20 @@
     "clean": "tsc --build tsconfig.build.json --clean",
     "postclean": "rimraf dist",
     "build": "tsc --build tsconfig.build.json",
-    "test": "jest",
-    "prepublish": "npm run build"
+    "test": "jest"
   },
   "dependencies": {
+    "@apidevtools/swagger-parser": "10.1.0",
     "openapi-types": "^8.0.0",
     "slugify": "1.6.5",
-    "swagger-parser": "^10.0.3",
     "url-join": "^4.0.1",
     "yaml": "2.0.0-5"
   },
   "devDependencies": {
+    "@jest/globals": "^28.1.0",
     "@types/url-join": "^4.0.1",
     "@types/yaml": "^1.9.7",
-    "jest": "^26.6.3",
+    "jest": "^28.1.0",
     "type-fest": "^2.12.0"
   },
   "repository": {

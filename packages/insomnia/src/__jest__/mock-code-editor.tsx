@@ -12,9 +12,10 @@ export class MockCodeEditor extends PureComponent<any> {
   render() {
     const { id, onChange, placeholder, defaultValue } = this.props;
     return <textarea
+      data-testid="CodeEditor"
       ref={this.ref}
       id={id}
-      onChange={e => onChange(e.currentTarget.value)}
+      onChange={event => onChange(event.currentTarget.value)}
       placeholder={placeholder}
       defaultValue={defaultValue}
     />;

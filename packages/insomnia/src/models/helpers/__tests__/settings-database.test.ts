@@ -1,3 +1,5 @@
+import { beforeEach, describe, expect, it } from '@jest/globals';
+
 import { globalBeforeEach } from '../../../__jest__/before-each';
 import { database as db } from '../../../common/database';
 import * as models from '../../../models';
@@ -24,7 +26,7 @@ describe('settings database', () => {
       const expectedSettings = await models.settings.getOrCreate();
 
       expect(changes[0]).toEqual([
-        [db.CHANGE_UPDATE, expectedSettings, false],
+        ['update', expectedSettings, false],
       ]);
 
       db.offChange(callback);

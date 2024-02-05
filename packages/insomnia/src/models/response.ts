@@ -1,14 +1,10 @@
-import crypto from 'crypto';
 import fs from 'fs';
-import mkdirp from 'mkdirp';
-import path from 'path';
 import { Readable } from 'stream';
-import { ValueOf } from 'type-fest';
 import zlib from 'zlib';
 
 import { database as db, Query } from '../common/database';
-import { getDataDirectory } from '../common/electron-helpers';
-import { LIBCURL_DEBUG_MIGRATION_MAP } from '../common/misc';
+import type { ResponseTimelineEntry } from '../main/network/libcurl-promise';
+import * as requestOperations from '../models/helpers/request-operations';
 import type { BaseModel } from './index';
 import * as models from './index';
 
@@ -24,12 +20,6 @@ export const canSync = false;
 
 export interface ResponseHeader {
   name: string;
-  value: string;
-}
-
-export interface ResponseTimelineEntry {
-  name: ValueOf<typeof LIBCURL_DEBUG_MIGRATION_MAP>;
-  timestamp: number;
   value: string;
 }
 
@@ -72,19 +62,19 @@ export function init(): BaseResponse {
     contentType: '',
     url: '',
     bytesRead: 0,
-    bytesContent: -1,
     // -1 means that it was legacy and this property didn't exist yet
+    bytesContent: -1,
     elapsedTime: 0,
     headers: [],
-    timelinePath: '',
     // Actual timelines are stored on the filesystem
-    bodyPath: '',
+    timelinePath: '',
     // Actual bodies are stored on the filesystem
-    bodyCompression: '__NEEDS_MIGRATION__',
+    bodyPath: '',
     // For legacy bodies
+    bodyCompression: '__NEEDS_MIGRATION__',
     error: '',
-    requestVersionId: null,
     // Things from the request
+    requestVersionId: null,
     settingStoreCookies: null,
     settingSendCookies: null,
     // Responses sent before environment filtering will have a special value
@@ -94,17 +84,12 @@ export function init(): BaseResponse {
 }
 
 export async function migrate(doc: Response) {
-  doc = await migrateBodyToFileSystem(doc);
   doc = await migrateBodyCompression(doc);
-  doc = await migrateTimelineToFileSystem(doc);
   return doc;
 }
 
 export function hookDatabaseInit(consoleLog: typeof console.log = console.log) {
   consoleLog('[db] Init responses DB');
-  process.nextTick(async () => {
-    await models.response.cleanDeletedResponses();
-  });
 }
 
 export function hookRemove(doc: Response, consoleLog: typeof console.log = console.log) {
@@ -179,7 +164,7 @@ export async function create(patch: Record<string, any> = {}, maxResponses = 20)
 
   const { parentId } = patch;
   // Create request version snapshot
-  const request = await models.request.getById(parentId);
+  const request = await requestOperations.getById(parentId);
   const requestVersion = request ? await models.requestVersion.create(request) : null;
   patch.requestVersionId = requestVersion ? requestVersion._id : null;
   // Filter responses by environment if setting is enabled
@@ -214,36 +199,61 @@ export function getLatestByParentId(parentId: string) {
   });
 }
 
-export function getBodyStream<T extends Response, TFail extends Readable>(
-  response: T,
-  readFailureValue?: TFail | null,
-) {
-  return getBodyStreamFromPath(response.bodyPath || '', response.bodyCompression, readFailureValue);
-}
-
-export const getBodyBuffer = <TFail = null>(
+export const getBodyStream = (
   response?: { bodyPath?: string; bodyCompression?: Compression },
-  readFailureValue?: TFail | null,
-) => getBodyBufferFromPath(
-    response?.bodyPath || '',
-    response?.bodyCompression || null,
-    readFailureValue,
-  );
+  readFailureValue?: string,
+): Readable | string | null => {
+  if (!response?.bodyPath) {
+    return null;
+  }
+  try {
+    fs.statSync(response?.bodyPath);
+  } catch (err) {
+    console.warn('Failed to read response body', err.message);
+    return readFailureValue === undefined ? null : readFailureValue;
+  }
+  if (response?.bodyCompression === 'zip') {
+    return fs.createReadStream(response?.bodyPath).pipe(zlib.createGunzip());
+  } else {
+    return fs.createReadStream(response?.bodyPath);
+  }
+};
+
+export const getBodyBuffer = (
+  response?: { bodyPath?: string; bodyCompression?: Compression },
+  readFailureValue?: string,
+): Buffer | string | null => {
+  if (!response?.bodyPath) {
+    // No body, so return empty Buffer
+    return Buffer.alloc(0);
+  }
+  try {
+    const rawBuffer = fs.readFileSync(response?.bodyPath);
+    if (response?.bodyCompression === 'zip') {
+      return zlib.gunzipSync(rawBuffer);
+    } else {
+      return rawBuffer;
+    }
+  } catch (err) {
+    console.warn('Failed to read response body', err.message);
+    return readFailureValue === undefined ? null : readFailureValue;
+  }
+};
 
 export function getTimeline(response: Response, showBody?: boolean) {
   const { timelinePath, bodyPath } = response;
 
-  // No body, so return empty Buffer
   if (!timelinePath) {
     return [];
   }
 
   try {
     const rawBuffer = fs.readFileSync(timelinePath);
-    const timeline = JSON.parse(rawBuffer.toString()) as ResponseTimelineEntry[];
+    const timelineString = rawBuffer.toString();
+    const timeline = JSON.parse(timelineString) as ResponseTimelineEntry[];
     const body: ResponseTimelineEntry[] = showBody ? [
       {
-        name: LIBCURL_DEBUG_MIGRATION_MAP.DataOut,
+        name: 'DataOut',
         timestamp: Date.now(),
         value: fs.readFileSync(bodyPath).toString(),
       },
@@ -256,139 +266,10 @@ export function getTimeline(response: Response, showBody?: boolean) {
   }
 }
 
-function getBodyStreamFromPath<TFail extends Readable>(
-  bodyPath: string,
-  compression: Compression,
-  readFailureValue?: TFail | null,
-): Readable | null | TFail {
-  // No body, so return empty Buffer
-  if (!bodyPath) {
-    return null;
-  }
-
-  try {
-    fs.statSync(bodyPath);
-  } catch (err) {
-    console.warn('Failed to read response body', err.message);
-    return readFailureValue === undefined ? null : readFailureValue;
-  }
-
-  const readStream = fs.createReadStream(bodyPath);
-
-  if (compression === 'zip') {
-    return readStream.pipe(zlib.createGunzip());
-  } else {
-    return readStream;
-  }
-}
-
-function getBodyBufferFromPath<T>(
-  bodyPath: string,
-  compression: Compression,
-  readFailureValue?: T | null,
-) {
-  // No body, so return empty Buffer
-  if (!bodyPath) {
-    return Buffer.alloc(0);
-  }
-
-  try {
-    const rawBuffer = fs.readFileSync(bodyPath);
-
-    if (compression === 'zip') {
-      return zlib.gunzipSync(rawBuffer);
-    } else {
-      return rawBuffer;
-    }
-  } catch (err) {
-    console.warn('Failed to read response body', err.message);
-    return readFailureValue === undefined ? null : readFailureValue;
-  }
-}
-
-async function migrateBodyToFileSystem(doc: Response) {
-  if (doc.hasOwnProperty('body') && doc._id && !doc.bodyPath) {
-    // @ts-expect-error -- TSCONVERSION previously doc.body and doc.encoding did exist but are now removed, and if they exist we want to migrate away from them
-    const bodyBuffer = Buffer.from(doc.body, doc.encoding || 'utf8');
-    const dir = path.join(getDataDirectory(), 'responses');
-    mkdirp.sync(dir);
-    const hash = crypto
-      .createHash('md5')
-      .update(bodyBuffer || '')
-      .digest('hex');
-    const bodyPath = path.join(dir, `${hash}.zip`);
-
-    try {
-      const buff = bodyBuffer || Buffer.from('');
-      fs.writeFileSync(bodyPath, buff);
-    } catch (err) {
-      console.warn('Failed to write response body to file', err.message);
-    }
-
-    return db.docUpdate(doc, {
-      bodyPath,
-      bodyCompression: null,
-    });
-  } else {
-    return doc;
-  }
-}
-
 function migrateBodyCompression(doc: Response) {
   if (doc.bodyCompression === '__NEEDS_MIGRATION__') {
     doc.bodyCompression = 'zip';
   }
 
   return doc;
-}
-
-async function migrateTimelineToFileSystem(doc: Response) {
-  if (doc.hasOwnProperty('timeline') && doc._id && !doc.timelinePath) {
-    const dir = path.join(getDataDirectory(), 'responses');
-    mkdirp.sync(dir);
-    // @ts-expect-error -- TSCONVERSION previously doc.timeline did exist but is now removed, and if it exists we want to migrate away from it
-    const timelineStr = JSON.stringify(doc.timeline, null, '\t');
-    const fsPath = doc.bodyPath + '.timeline';
-
-    try {
-      fs.writeFileSync(fsPath, timelineStr);
-    } catch (err) {
-      console.warn('Failed to write response body to file', err.message);
-    }
-
-    return db.docUpdate(doc, {
-      timelinePath: fsPath,
-    });
-  } else {
-    return doc;
-  }
-}
-
-export async function cleanDeletedResponses() {
-  const responsesDir = path.join(getDataDirectory(), 'responses');
-  mkdirp.sync(responsesDir);
-  const files = fs.readdirSync(responsesDir);
-
-  if (files.length === 0) {
-    return;
-  }
-
-  const whitelistFiles: string[] = [];
-
-  for (const r of (await db.all<Response>(type) || [])) {
-    whitelistFiles.push(r.bodyPath.slice(responsesDir.length + 1));
-    whitelistFiles.push(r.timelinePath.slice(responsesDir.length + 1));
-  }
-
-  for (const filePath of files) {
-    if (whitelistFiles.indexOf(filePath) >= 0) {
-      continue;
-    }
-
-    try {
-      fs.unlinkSync(path.join(responsesDir, filePath));
-    } catch (err) {
-      // Just keep going, doesn't matter
-    }
-  }
 }

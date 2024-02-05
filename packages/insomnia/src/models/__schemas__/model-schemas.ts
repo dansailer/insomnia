@@ -15,12 +15,12 @@ const toSchema = <T>(obj: T): Schema<T> => {
   const output: Partial<Schema<T>> = {};
 
   Object.keys(cloned).forEach(key => {
+    // @ts-expect-error -- mapping unsoundness
     output[key] = () => cloned[key];
   });
 
   return output as Schema<T>;
 };
-
 export const baseModelSchema: Schema<BaseModel> = {
   _id: () => 'id',
   created: () => 1234,

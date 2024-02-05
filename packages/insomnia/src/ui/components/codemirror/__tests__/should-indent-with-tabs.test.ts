@@ -1,4 +1,6 @@
-import { shouldIndentWithTabs } from '../should-indent-with-tabs';
+import { describe, expect, it } from '@jest/globals';
+
+import { shouldIndentWithTabs } from '../code-editor';
 
 describe('shouldIndentWithTabs()', () => {
   it('should return false if mode contains yaml', () => {

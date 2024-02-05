@@ -1,54 +1,77 @@
-import { MultiSwitch } from 'insomnia-components';
-import React, { FunctionComponent, useCallback } from 'react';
-import { useSelector } from 'react-redux';
+import React, { FC } from 'react';
+import { NavLink, useParams } from 'react-router-dom';
+import styled from 'styled-components';
 
-import type { GlobalActivity } from '../../common/constants';
-import { ACTIVITY_DEBUG, ACTIVITY_SPEC, ACTIVITY_UNIT_TEST } from '../../common/constants';
-import { isDesign } from '../../models/workspace';
-import { selectActiveActivity, selectActiveWorkspace } from '../redux/selectors';
-import { HandleActivityChange } from './wrapper';
+import { ACTIVITY_DEBUG, ACTIVITY_SPEC } from '../../common/constants';
 
-interface Props {
-  handleActivityChange: HandleActivityChange;
-}
+const Nav = styled.nav({
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignContent: 'space-evenly',
+  fontWeight: '500',
+  color: 'var(--color-font)',
+  background: 'var(--hl-xs)',
+  border: '0',
+  borderRadius: '100px',
+  padding: 'var(--padding-xxs)',
+  transform: 'scale(0.9)',
+  transformOrigin: 'center',
+  '& > * :not(:last-child)': {
+    marginRight: 'var(--padding-xs)',
+  },
+});
 
-export const ActivityToggle: FunctionComponent<Props> = ({ handleActivityChange }) => {
-  const choices = [
-    {
-      label: 'Design',
-      value: ACTIVITY_SPEC,
-    },
-    {
-      label: 'Debug',
-      value: ACTIVITY_DEBUG,
-    },
-    {
-      label: 'Test',
-      value: ACTIVITY_UNIT_TEST,
-    },
-  ];
+const Link = styled(NavLink)({
+  minWidth: '4rem',
+  margin: '0 auto',
+  textTransform: 'uppercase',
+  textAlign: 'center',
+  fontSize: 'var(--font-size-xs)',
+  padding: 'var(--padding-xs) var(--padding-xxs)',
+  borderRadius: 'var(--line-height-sm)',
+  color: 'var(--hl)!important',
+  background: 'transparent',
+  '&.active': {
+    color: 'var(--color-font)!important',
+    background: 'var(--color-bg)',
+  },
+  '&:hover,&:active': {
+    textDecoration: 'none',
+  },
+  '&:focus-visible': {
+    outline: '0',
+  },
+});
 
-  const activeActivity = useSelector(selectActiveActivity);
-  const activeWorkspace = useSelector(selectActiveWorkspace);
+export const ActivityToggle: FC = () => {
+  const { organizationId, projectId, workspaceId } = useParams<{ organizationId: string; projectId: string; workspaceId: string}>();
 
-  const onChange = useCallback((nextActivity: GlobalActivity) => {
-    handleActivityChange({ workspaceId: activeWorkspace?._id, nextActivity });
-  }, [handleActivityChange, activeWorkspace]);
-
-  if (!activeActivity) {
+  if (!workspaceId || !projectId || !organizationId) {
     return null;
   }
 
-  if (!activeWorkspace || !isDesign(activeWorkspace)) {
-    return null;
-  }
+  const workspaceRoutePath = `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}`;
 
   return (
-    <MultiSwitch
-      name="activity-toggle"
-      onChange={onChange}
-      choices={choices}
-      selectedValue={activeActivity}
-    />
+    <Nav>
+      <Link
+        to={`${workspaceRoutePath}/${ACTIVITY_SPEC}`}
+        className={({ isActive }) => isActive ? 'active' : undefined }
+      >
+        Design
+      </Link>
+      <Link
+        to={`${workspaceRoutePath}/${ACTIVITY_DEBUG}`}
+        className={({ isActive }) => isActive ? 'active' : undefined }
+      >
+        Debug
+      </Link>
+      <Link
+        to={`${workspaceRoutePath}/test`}
+        className={({ isActive }) => isActive ? 'active' : undefined }
+      >
+        Test
+      </Link>
+    </Nav>
   );
 };

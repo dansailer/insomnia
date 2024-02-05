@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron';
+import electron from 'electron';
 import querystring from 'querystring';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -22,18 +22,22 @@ export function initNewOAuthSession() {
   return authWindowSessionId;
 }
 
-export function responseToObject(body, keys, defaults = {}) {
+export function responseToObject(body: string | null, keys: string[], defaults: Record<string, string | string[]> = {}) {
   let data: querystring.ParsedUrlQuery | null = null;
 
   try {
-    data = JSON.parse(body);
+    // TODO: remove non-null assertion
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    data = JSON.parse(body!);
   } catch (err) {}
 
   if (!data) {
     try {
       // NOTE: parse does not return a JS Object, so
       //   we cannot use hasOwnProperty on it
-      data = querystring.parse(body);
+      // TODO: remove non-null assertion
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      data = querystring.parse(body!);
     } catch (err) {}
   }
 
@@ -42,7 +46,7 @@ export function responseToObject(body, keys, defaults = {}) {
     data = {};
   }
 
-  const results = {};
+  const results: Record<string, string | string[] | null | undefined> = {};
 
   for (const key of keys) {
     if (data[key] !== undefined) {
@@ -62,7 +66,12 @@ export function authorizeUserInWindow({
   urlSuccessRegex = /(code=).*/,
   urlFailureRegex = /(error=).*/,
   sessionId,
-}) {
+}: {
+  url: string;
+  urlSuccessRegex: RegExp;
+  urlFailureRegex: RegExp;
+  sessionId: string;
+}): Promise<string> {
   return new Promise<string>(async (resolve, reject) => {
     let finalUrl: string | null = null;
 
@@ -72,7 +81,7 @@ export function authorizeUserInWindow({
     } = await models.settings.getOrCreate();
 
     // Create a child window
-    const child = new BrowserWindow({
+    const child = new electron.BrowserWindow({
       webPreferences: {
         nodeIntegration: false,
         partition: sessionId,
@@ -112,6 +121,44 @@ export function authorizeUserInWindow({
         reject(new Error(errorDescription));
       }
     });
+
+    // Select client certificate during login if needed.
+    // More Info: https://textslashplain.com/2020/05/04/client-certificate-authentication/
+    child.webContents.on('select-client-certificate', (event, url, certificateList, callback) => {
+      event.preventDefault();
+
+      // There is only a single certificate so just use
+      // that certificate without prompting user.
+      // In the future maybe this could be a setting?
+      if (certificateList.length === 1) {
+        callback(certificateList[0]);
+        return;
+      }
+
+      const buttonLabels = certificateList.map(c => `${c.subjectName} (${c.issuerName})`);
+      const cancelId = buttonLabels.length;
+      const options = {
+        type: 'none',
+        buttons: [...buttonLabels, 'Cancel'],
+        cancelId: cancelId,
+        message: `The website\n"${url}"\nrequires a client certificate.`,
+        detail: 'This website requires a certificate to validate your identity. Select the certificate to use when you connect to this website.',
+        textWidth: 300,
+      };
+
+      // Prompt the user to select a certificate to use.
+      electron.dialog.showMessageBox(child, options).then(r => {
+        const selectedButtonIndex = r.response;
+        // Cancel button clicked
+        if (r.response === cancelId) {
+          child.close();
+          return;
+        }
+        const selectedCertificate = certificateList[selectedButtonIndex];
+        callback(selectedCertificate);
+      });
+    });
+
     // Catch the redirect after login
     child.webContents.on('did-navigate', () => {
       // Be sure to resolve URL so that we can handle redirects with no host like /foo/bar
@@ -143,9 +190,9 @@ export function authorizeUserInWindow({
 
     try {
       await child.loadURL(url);
-    } catch (e) {
+    } catch (error) {
       // Reject with error to show result in OAuth2 tab
-      reject(e);
+      reject(error);
       // Need to close child window here since an exception in loadURL precludes normal call in
       // _parseUrl
       child.close();

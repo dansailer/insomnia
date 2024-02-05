@@ -1,80 +1,29 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import React, { PureComponent } from 'react';
+import React, { FC, useEffect, useRef } from 'react';
+import { OverlayContainer } from 'react-aria';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
-import type { GitLogEntry, GitVCS } from '../../../sync/git/git-vcs';
-import { Modal } from '../base/modal';
+import type { GitLogEntry } from '../../../sync/git/git-vcs';
+import { type ModalHandle, Modal, ModalProps } from '../base/modal';
 import { ModalBody } from '../base/modal-body';
 import { ModalFooter } from '../base/modal-footer';
 import { ModalHeader } from '../base/modal-header';
 import { TimeFromNow } from '../time-from-now';
 import { Tooltip } from '../tooltip';
 
-interface Props {
-  vcs: GitVCS;
-}
-
-interface State {
+type Props = ModalProps & {
   logs: GitLogEntry[];
   branch: string;
-}
+};
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class GitLogModal extends PureComponent<Props, State> {
-  modal: Modal | null = null;
+export const GitLogModal: FC<Props> = ({ branch, logs, onHide }) => {
+  const modalRef = useRef<ModalHandle>(null);
 
-  state: State = {
-    logs: [],
-    branch: '??',
-  };
+  useEffect(() => {
+    modalRef.current?.show();
+  }, []);
 
-  _setModalRef(ref: Modal) {
-    this.modal = ref;
-  }
-
-  async show() {
-    const { vcs } = this.props;
-    const logs = await vcs.log();
-    const branch = await vcs.getBranch();
-    this.setState({
-      logs,
-      branch,
-    });
-    this.modal?.show();
-  }
-
-  hide() {
-    this.modal?.hide();
-  }
-
-  renderLogEntryRow(entry: GitLogEntry) {
-    const {
-      commit: { author, message },
-      oid,
-    } = entry;
-    return (
-      <tr key={oid}>
-        <td>{message}</td>
-        <td>
-          <TimeFromNow
-            className="no-wrap"
-            timestamp={author.timestamp * 1000}
-            intervalSeconds={30}
-          />
-        </td>
-        <td>
-          <Tooltip message={`${author.name} <${author.email}>`} delay={800}>
-            {author.name}
-          </Tooltip>
-        </td>
-      </tr>
-    );
-  }
-
-  render() {
-    const { logs, branch } = this.state;
-    return (
-      <Modal ref={this._setModalRef}>
+  return (
+    <OverlayContainer>
+      <Modal ref={modalRef} onHide={onHide}>
         <ModalHeader>Git History ({logs.length})</ModalHeader>
         <ModalBody className="pad">
           <table className="table--fancy table--striped">
@@ -85,7 +34,29 @@ export class GitLogModal extends PureComponent<Props, State> {
                 <th className="text-left">Author</th>
               </tr>
             </thead>
-            <tbody>{logs.map(this.renderLogEntryRow)}</tbody>
+            <tbody>{logs.map(entry => {
+              const {
+                commit: { author, message },
+                oid,
+              } = entry;
+              return (
+                <tr key={oid}>
+                  <td>{message}</td>
+                  <td>
+                    <TimeFromNow
+                      className="no-wrap"
+                      timestamp={author.timestamp * 1000}
+                      intervalSeconds={30}
+                    />
+                  </td>
+                  <td>
+                    <Tooltip message={`${author.name} <${author.email}>`} delay={800}>
+                      {author.name}
+                    </Tooltip>
+                  </td>
+                </tr>
+              );
+            })}</tbody>
           </table>
         </ModalBody>
         <ModalFooter>
@@ -93,12 +64,13 @@ export class GitLogModal extends PureComponent<Props, State> {
             <i className="fa fa-code-fork" /> {branch}
           </div>
           <div>
-            <button className="btn" onClick={this.hide}>
+            <button className="btn" onClick={() => modalRef.current?.hide()}>
               Done
             </button>
           </div>
         </ModalFooter>
       </Modal>
-    );
-  }
-}
+    </OverlayContainer>
+  );
+};
+GitLogModal.displayName = 'GitLogModal';

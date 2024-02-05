@@ -1,7 +1,7 @@
 import { CurlHttpVersion, CurlNetrc } from '@getinsomnia/node-libcurl';
+import { beforeEach, describe, expect, it } from '@jest/globals';
 import electron from 'electron';
 import fs from 'fs';
-import { HttpVersions } from 'insomnia-common';
 import { join as pathJoin, resolve as pathResolve } from 'path';
 
 import { globalBeforeEach } from '../../__jest__/before-each';
@@ -16,12 +16,14 @@ import {
 } from '../../common/constants';
 import { filterHeaders } from '../../common/misc';
 import { getRenderedRequestAndContext } from '../../common/render';
+import { HttpVersions } from '../../common/settings';
+import { _parseHeaders, getHttpVersion } from '../../main/network/libcurl-promise';
+import { DEFAULT_BOUNDARY } from '../../main/network/multipart';
+import { _getAwsAuthHeaders } from '../../main/network/parse-header-strings';
 import * as models from '../../models';
-import { _parseHeaders, getHttpVersion } from '../libcurl-promise';
-import { DEFAULT_BOUNDARY } from '../multipart';
 import * as networkUtils from '../network';
 import { getSetCookiesFromResponseHeaders } from '../network';
-import { _getAwsAuthHeaders } from '../parse-header-strings';
+
 window.app = electron.app;
 
 const getRenderedRequest = async (args: Parameters<typeof getRenderedRequestAndContext>[0]) => (await getRenderedRequestAndContext(args)).request;
@@ -101,7 +103,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -128,11 +130,12 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         POSTFIELDS: 'foo=bar',
         POST: 1,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/?foo%20bar=hello%26world',
         USERAGENT: `insomnia/${getAppVersion()}`,
         VERBOSE: true,
@@ -175,7 +178,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -197,10 +200,11 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         POSTFIELDS: 'foo=bar&bar=&=value',
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/',
         USERAGENT: `insomnia/${getAppVersion()}`,
         VERBOSE: true,
@@ -274,7 +278,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -296,10 +300,11 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         POSTFIELDS: 'foo=bar',
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/?foo%20bar=hello%26world',
         USERAGENT: `insomnia/${getAppVersion()}`,
         VERBOSE: true,
@@ -333,7 +338,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -356,11 +361,12 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         INFILESIZE_LARGE: 26,
         PROXY: '',
         READDATA: fs.readFileSync(fileName, 'utf8'),
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         UPLOAD: 1,
         URL: 'http://localhost/',
         USERAGENT: `insomnia/${getAppVersion()}`,
@@ -412,7 +418,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -436,6 +442,7 @@ describe('actuallySend()', () => {
           'Accept-Encoding:',
         ],
         INFILESIZE_LARGE: 244,
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         READDATA: [
           `--${DEFAULT_BOUNDARY}`,
@@ -451,7 +458,7 @@ describe('actuallySend()', () => {
           '',
         ].join('\r\n'),
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/',
         UPLOAD: 1,
         USERAGENT: `insomnia/${getAppVersion()}`,
@@ -472,7 +479,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -488,9 +495,10 @@ describe('actuallySend()', () => {
         COOKIEFILE: '',
         FOLLOWLOCATION: true,
         HTTPHEADER: ['Accept: */*', 'Accept-Encoding:', 'content-type:'],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://my/path',
         UNIX_SOCKET_PATH: '/my/socket',
         USERAGENT: `insomnia/${getAppVersion()}`,
@@ -511,7 +519,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -527,9 +535,10 @@ describe('actuallySend()', () => {
         COOKIEFILE: '',
         FOLLOWLOCATION: true,
         HTTPHEADER: ['Accept: */*', 'Accept-Encoding:', 'content-type:'],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost:3000/foo/bar',
         USERAGENT: `insomnia/${getAppVersion()}`,
         VERBOSE: true,
@@ -549,7 +558,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -565,9 +574,10 @@ describe('actuallySend()', () => {
         COOKIEFILE: '',
         FOLLOWLOCATION: true,
         HTTPHEADER: ['Accept: */*', 'Accept-Encoding:', 'content-type:'],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://unix:3000/my/path',
         USERAGENT: `insomnia/${getAppVersion()}`,
         VERBOSE: true,
@@ -588,7 +598,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       settings,
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -604,9 +614,10 @@ describe('actuallySend()', () => {
         COOKIEFILE: '',
         FOLLOWLOCATION: true,
         HTTPHEADER: ['Accept: */*', 'Accept-Encoding:', 'content-type:'],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         NETRC: CurlNetrc.Required,
         URL: '',
         USERAGENT: `insomnia/${getAppVersion()}`,
@@ -684,7 +695,7 @@ describe('actuallySend()', () => {
     const renderedRequest = await getRenderedRequest({ request });
     const response = await networkUtils._actuallySend(
       renderedRequest,
-      [],
+      '',
       { ...settings, validateSSL: false },
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
@@ -711,13 +722,14 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         POSTFIELDS: 'foo=bar',
         POST: 1,
         PROXY: '',
         SSL_VERIFYHOST: 0, // should disbale SSL
         SSL_VERIFYPEER: 0, // should disbale SSL
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/?foo%20bar=hello%26world',
         USERAGENT: `insomnia/${getAppVersion()}`,
         VERBOSE: true,
@@ -733,7 +745,7 @@ describe('actuallySend()', () => {
       parentId: workspace._id,
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const responseV1 = await networkUtils._actuallySend(renderedRequest, [], {
+    const responseV1 = await networkUtils._actuallySend(renderedRequest, '', {
       ...settings,
       preferredHttpVersion: HttpVersions.V1_0,
     });

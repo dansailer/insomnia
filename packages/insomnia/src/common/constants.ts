@@ -1,10 +1,9 @@
-import { KeyCombination } from 'insomnia-common';
-import path from 'path';
 import { unreachableCase } from 'ts-assert-unreachable';
 
 import appConfig from '../../config/config.json';
 import { version } from '../../package.json';
-import { getDataDirectory, getPortableExecutableDir } from './electron-helpers';
+import { getPortableExecutableDir } from './electron-helpers';
+import { KeyCombination } from './settings';
 
 const env = process['env'];
 
@@ -23,8 +22,23 @@ export const isWindows = () => getAppPlatform() === 'win32';
 export const getAppEnvironment = () => process.env.INSOMNIA_ENV || 'production';
 export const isDevelopment = () => getAppEnvironment() === 'development';
 export const getSegmentWriteKey = () => appConfig.segmentWriteKeys[(isDevelopment() || env.PLAYWRIGHT) ? 'development' : 'production'];
+export const getSentryDsn = () => appConfig.sentryDsn;
 export const getAppBuildDate = () => new Date(process.env.BUILD_DATE ?? '').toLocaleDateString();
-
+export type AuthType =
+  | 'none'
+  | 'apikey'
+  | 'oauth2'
+  | 'oauth1'
+  | 'basic'
+  | 'digest'
+  | 'bearer'
+  | 'ntlm'
+  | 'hawk'
+  | 'iam'
+  | 'netrc'
+  | 'asap'
+  | 'sha256'
+  | 'sha1';
 export const getBrowserUserAgent = () => encodeURIComponent(
   String(window.navigator.userAgent)
     .replace(new RegExp(`${getAppId()}\\/\\d+\\.\\d+\\.\\d+ `), '')
@@ -68,14 +82,6 @@ export const LARGE_RESPONSE_MB = 5;
 export const HUGE_RESPONSE_MB = 100;
 export const FLEXIBLE_URL_REGEX = /^(http|https):\/\/[\wàâäèéêëîïôóœùûüÿçÀÂÄÈÉÊËÎÏÔŒÙÛÜŸÇ\-_.]+[/\wàâäèéêëîïôóœùûüÿçÀÂÄÈÉÊËÎÏÔŒÙÛÜŸÇ.\-+=:\][@%^*&!#?;$~'(),]*/;
 export const CHECK_FOR_UPDATES_INTERVAL = 1000 * 60 * 60 * 3; // 3 hours
-export const PLUGIN_PATH = path.join(getDataDirectory(), 'plugins');
-export const AUTOBIND_CFG = {
-  methodsToIgnore: [
-    'UNSAFE_componentWillMount',
-    'UNSAFE_componentWillReceiveProps',
-    'UNSAFE_componentWillUpdate',
-  ],
-};
 
 // Available editor key map
 export enum EditorKeyMap {
@@ -243,7 +249,7 @@ const previewModeMap = {
   [PREVIEW_MODE_SOURCE]: ['Source', 'Source Code'],
   [PREVIEW_MODE_RAW]: ['Raw', 'Raw Data'],
 };
-export const PREVIEW_MODES = Object.keys(previewModeMap);
+export const PREVIEW_MODES = Object.keys(previewModeMap) as (keyof typeof previewModeMap)[];
 
 // Content Types
 export const CONTENT_TYPE_JSON = 'application/json';
@@ -256,7 +262,7 @@ export const CONTENT_TYPE_FORM_DATA = 'multipart/form-data';
 export const CONTENT_TYPE_FILE = 'application/octet-stream';
 export const CONTENT_TYPE_GRAPHQL = 'application/graphql';
 export const CONTENT_TYPE_OTHER = '';
-const contentTypesMap = {
+const contentTypesMap: Record<string, string[]> = {
   [CONTENT_TYPE_EDN]: ['EDN', 'EDN'],
   [CONTENT_TYPE_FILE]: ['File', 'Binary File'],
   [CONTENT_TYPE_FORM_DATA]: ['Multipart', 'Multipart Form'],
@@ -271,6 +277,7 @@ const contentTypesMap = {
 
 // Auth Types
 export const AUTH_NONE = 'none';
+export const AUTH_API_KEY = 'apikey';
 export const AUTH_OAUTH_2 = 'oauth2';
 export const AUTH_OAUTH_1 = 'oauth1';
 export const AUTH_BASIC = 'basic';
@@ -288,7 +295,8 @@ export const HAWK_ALGORITHM_SHA1 = 'sha1';
 export const JSON_ORDER_PREFIX = '&';
 export const JSON_ORDER_SEPARATOR = '~|';
 
-const authTypesMap = {
+const authTypesMap: Record<string, string[]> = {
+  [AUTH_API_KEY]: ['API Key', 'API Key Auth'],
   [AUTH_BASIC]: ['Basic', 'Basic Auth'],
   [AUTH_DIGEST]: ['Digest', 'Digest Auth'],
   [AUTH_NTLM]: ['NTLM', 'Microsoft NTLM'],
@@ -299,7 +307,7 @@ const authTypesMap = {
   [AUTH_AWS_IAM]: ['AWS', 'AWS IAM v4'],
   [AUTH_ASAP]: ['ASAP', 'Atlassian ASAP'],
   [AUTH_NETRC]: ['Netrc', 'Netrc File'],
-} as const;
+};
 
 // Sort Orders
 export type SortOrder =
@@ -345,7 +353,7 @@ export type DashboardSortOrder =
   | 'created-desc'
   | 'modified-desc';
 
-export const DASHBOARD_SORT_ORDERS = [
+export const DASHBOARD_SORT_ORDERS: DashboardSortOrder[] = [
   SORT_MODIFIED_DESC,
   SORT_NAME_ASC,
   SORT_NAME_DESC,
@@ -361,7 +369,9 @@ export const dashboardSortOrderName: Record<DashboardSortOrder, string> = {
   [SORT_MODIFIED_DESC]: 'Last Modified',
 };
 
-export function getPreviewModeName(previewMode, useLong = false) {
+export type PreviewMode = 'friendly' | 'source' | 'raw';
+
+export function getPreviewModeName(previewMode: PreviewMode, useLong = false) {
   if (previewModeMap.hasOwnProperty(previewMode)) {
     return useLong ? previewModeMap[previewMode][1] : previewModeMap[previewMode][0];
   } else {
@@ -381,7 +391,7 @@ export function getContentTypeName(contentType?: string | null, useLong = false)
   return useLong ? contentTypesMap[CONTENT_TYPE_OTHER][1] : contentTypesMap[CONTENT_TYPE_OTHER][0];
 }
 
-export function getAuthTypeName(authType, useLong = false) {
+export function getAuthTypeName(authType: string, useLong = false) {
   if (authTypesMap.hasOwnProperty(authType)) {
     return useLong ? authTypesMap[authType][1] : authTypesMap[authType][0];
   } else {
@@ -389,7 +399,7 @@ export function getAuthTypeName(authType, useLong = false) {
   }
 }
 
-export function getContentTypeFromHeaders(headers, defaultValue: string | null = null) {
+export function getContentTypeFromHeaders(headers: any[], defaultValue: string | null = null) {
   if (!Array.isArray(headers)) {
     return null;
   }
@@ -399,13 +409,13 @@ export function getContentTypeFromHeaders(headers, defaultValue: string | null =
 }
 
 // Sourced from https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
-export const RESPONSE_CODE_DESCRIPTIONS = {
+export const RESPONSE_CODE_DESCRIPTIONS: Record<number, string> = {
   // Special
   [STATUS_CODE_PLUGIN_ERROR]:
     'An Insomnia plugin threw an error which prevented the request from sending',
   // 100s
   100: 'This interim response indicates that everything so far is OK and that the client should continue with the request or ignore it if it is already finished.',
-  101: 'This code is sent in response to an Upgrade: request header by the client and indicates the protocol the server is switching to. It was introduced to allow migration to an incompatible protocol version, and it is not in common use.',
+  101: 'This code is sent in response to an Upgrade: request header by the client and indicates the protocol the server is switching to.',
   // 200s
   200: 'The request has succeeded.',
   201: 'The request has succeeded and a new resource has been created as a result. This is typically the response sent after POST requests, or some PUT requests.',
@@ -470,7 +480,7 @@ export const RESPONSE_CODE_DESCRIPTIONS = {
   511: 'The 511 status code indicates that the client needs to authenticate to gain network access.',
 };
 
-export const RESPONSE_CODE_REASONS = {
+export const RESPONSE_CODE_REASONS: Record<number, string> = {
   // Special
   [STATUS_CODE_PLUGIN_ERROR]: 'Plugin Error',
   // 100s
@@ -545,6 +555,8 @@ export const WORKSPACE_ID_KEY = '__WORKSPACE_ID__';
 export const BASE_ENVIRONMENT_ID_KEY = '__BASE_ENVIRONMENT_ID__';
 export const EXPORT_TYPE_REQUEST = 'request';
 export const EXPORT_TYPE_GRPC_REQUEST = 'grpc_request';
+export const EXPORT_TYPE_WEBSOCKET_REQUEST = 'websocket_request';
+export const EXPORT_TYPE_WEBSOCKET_PAYLOAD = 'websocket_payload';
 export const EXPORT_TYPE_REQUEST_GROUP = 'request_group';
 export const EXPORT_TYPE_UNIT_TEST_SUITE = 'unit_test_suite';
 export const EXPORT_TYPE_UNIT_TEST = 'unit_test';

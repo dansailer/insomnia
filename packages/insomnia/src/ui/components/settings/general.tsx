@@ -1,6 +1,4 @@
-import { EnvironmentHighlightColorStyle, HttpVersion, HttpVersions, UpdateChannel } from 'insomnia-common';
-import { Tooltip } from 'insomnia-components';
-import React, { FC, Fragment, useCallback } from 'react';
+import React, { FC, Fragment } from 'react';
 import { useSelector } from 'react-redux';
 
 import {
@@ -14,6 +12,7 @@ import {
   updatesSupported,
 } from '../../../common/constants';
 import { docsKeyMaps } from '../../../common/documentation';
+import { HttpVersion, HttpVersions, UpdateChannel } from '../../../common/settings';
 import { strings } from '../../../common/strings';
 import * as models from '../../../models';
 import { initNewOAuthSession } from '../../../network/o-auth-2/misc';
@@ -21,6 +20,7 @@ import { selectSettings, selectStats } from '../../redux/selectors';
 import { Link } from '../base/link';
 import { CheckForUpdatesButton } from '../check-for-updates-button';
 import { HelpTooltip } from '../help-tooltip';
+import { Tooltip } from '../tooltip';
 import { BooleanSetting } from './boolean-setting';
 import { EnumSetting } from './enum-setting';
 import { MaskedSetting } from './masked-setting';
@@ -42,11 +42,6 @@ const RestartTooltip: FC<{ message: string }> = ({ message }) => (
 
 const DevelopmentOnlySettings: FC = () => {
   const { launches } = useSelector(selectStats);
-
-  const onChangeLaunches = useCallback(async event => {
-    const launches = parseInt(event.target.value, 10);
-    await models.stats.update({ launches });
-  }, []);
 
   if (!isDevelopment()) {
     return null;
@@ -73,7 +68,10 @@ const DevelopmentOnlySettings: FC = () => {
               value={String(launches)}
               min={0}
               name="launches"
-              onChange={onChangeLaunches}
+              onChange={async event => {
+                const launches = parseInt(event.target.value, 10);
+                await models.stats.update({ launches });
+              }}
               type={'number'}
             />
           </label>
@@ -123,26 +121,13 @@ export const General: FC = () => {
       </div>
 
       <div className="row-fill row-fill--top pad-top-sm">
-        <EnumSetting<EnvironmentHighlightColorStyle>
-          label="Environment highlight style"
-          help="Select the sub-environment highlight area. Configure the highlight color itself in your environment settings."
-          setting="environmentHighlightColorStyle"
-          values={[
-            { value:'sidebar-indicator', name: 'Sidebar indicator' },
-            { value:'sidebar-edge', name: 'Sidebar edge' },
-            { value:'window-top', name: 'Window top' },
-            { value:'window-bottom', name: 'Window bottom' },
-            { value:'window-left', name: 'Window left' },
-            { value:'window-right', name: 'Window right' },
-          ]}
-        />
-
         <NumberSetting
-          label="Autocomplete popup delay"
+          label="Autocomplete popup delay (ms)"
           setting="autocompleteDelay"
           help="Delay the autocomplete popup by milliseconds. Enter 0 to disable the autocomplete delay."
           min={0}
           max={3000}
+          step={100}
         />
       </div>
 
@@ -286,10 +271,11 @@ export const General: FC = () => {
           min={-1}
         />
         <NumberSetting
-          label="Request timeout"
+          label="Request timeout (ms)"
           setting="timeout"
-          help="Enter the maximum seconds allotted before a request will timeout. Enter -1 to disable timeouts. "
-          min={-1}
+          help="Enter the maximum milliseconds allotted before a request will timeout. Enter 0 to disable timeouts. "
+          min={0}
+          step={100}
         />
       </div>
 

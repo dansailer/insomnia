@@ -1,10 +1,11 @@
 import clone from 'clone';
 
-import { database as db } from '../../../common/database';
+import { type ChangeBufferEvent } from '../../../common/database';
 import { pluralize } from '../../../common/misc';
 import * as models from '../../../models';
 import { BaseModel } from '../../../models';
 import { ApiSpec } from '../../../models/api-spec';
+import { CaCertificate } from '../../../models/ca-certificate';
 import { ClientCertificate } from '../../../models/client-certificate';
 import { CookieJar } from '../../../models/cookie-jar';
 import { Environment } from '../../../models/environment';
@@ -27,6 +28,9 @@ import { Stats } from '../../../models/stats';
 import { UnitTest } from '../../../models/unit-test';
 import { UnitTestResult } from '../../../models/unit-test-result';
 import { UnitTestSuite } from '../../../models/unit-test-suite';
+import { WebSocketPayload } from '../../../models/websocket-payload';
+import { WebSocketRequest } from '../../../models/websocket-request';
+import { WebSocketResponse } from '../../../models/websocket-response';
 import { Workspace } from '../../../models/workspace';
 import { WorkspaceMeta } from '../../../models/workspace-meta';
 
@@ -36,7 +40,7 @@ const ENTITY_INITIALIZE = 'entities/initialize';
 // ~~~~~~~~ //
 // Reducers //
 // ~~~~~~~~ //
-function getReducerName(type) {
+function getReducerName(type: string) {
   // Lowercase first letter (camel case)
   const lowerFirstLetter = `${type.slice(0, 1).toLowerCase()}${type.slice(1)}`;
   return pluralize(lowerFirstLetter);
@@ -61,6 +65,7 @@ export interface EntitiesState {
   requestMetas: EntityRecord<RequestMeta>;
   responses: EntityRecord<Response>;
   oAuth2Tokens: EntityRecord<OAuth2Token>;
+  caCertificate: EntityRecord<CaCertificate>;
   clientCertificates: EntityRecord<ClientCertificate>;
   pluginDatas: EntityRecord<PluginData>;
   unitTestSuites: EntityRecord<UnitTestSuite>;
@@ -70,6 +75,9 @@ export interface EntitiesState {
   protoDirectories: EntityRecord<ProtoDirectory>;
   grpcRequests: EntityRecord<GrpcRequest>;
   grpcRequestMetas: EntityRecord<GrpcRequestMeta>;
+  webSocketPayloads: EntityRecord<WebSocketPayload>;
+  webSocketRequests: EntityRecord<WebSocketRequest>;
+  webSocketResponses: EntityRecord<WebSocketResponse>;
 }
 
 export const initialEntitiesState: EntitiesState = {
@@ -89,6 +97,7 @@ export const initialEntitiesState: EntitiesState = {
   requestMetas: {},
   responses: {},
   oAuth2Tokens: {},
+  caCertificate: {},
   clientCertificates: {},
   pluginDatas: {},
   unitTestSuites: {},
@@ -98,9 +107,12 @@ export const initialEntitiesState: EntitiesState = {
   protoDirectories: {},
   grpcRequests: {},
   grpcRequestMetas: {},
+  webSocketPayloads: {},
+  webSocketRequests: {},
+  webSocketResponses: {},
 };
 
-export function reducer(state = initialEntitiesState, action) {
+export function reducer(state = initialEntitiesState, action: any) {
   switch (action.type) {
     case ENTITY_INITIALIZE:
       const freshState = clone(initialEntitiesState);
@@ -108,7 +120,10 @@ export function reducer(state = initialEntitiesState, action) {
 
       for (const doc of docs) {
         const referenceName = getReducerName(doc.type);
-        freshState[referenceName][doc._id] = doc;
+        if (!(freshState as any)[referenceName]) {
+          (freshState as any)[referenceName] = {};
+        }
+        (freshState as any)[referenceName][doc._id] = doc;
       }
 
       return freshState;
@@ -119,16 +134,18 @@ export function reducer(state = initialEntitiesState, action) {
       const newState = { ...state };
       const { changes } = action;
 
-      for (const [event, doc] of changes) {
+      for (const [event, doc] of changes as ChangeBufferEvent[]) {
         const referenceName = getReducerName(doc.type);
 
         switch (event) {
-          case db.CHANGE_INSERT:
-          case db.CHANGE_UPDATE:
+          case 'insert':
+          case 'update':
+            // @ts-expect-error -- mapping unsoundness
             newState[referenceName][doc._id] = doc;
             break;
 
-          case db.CHANGE_REMOVE:
+          case 'remove':
+            // @ts-expect-error -- mapping unsoundness
             delete newState[referenceName][doc._id];
             break;
 
@@ -146,19 +163,19 @@ export function reducer(state = initialEntitiesState, action) {
 // ~~~~~~~ //
 // Actions //
 // ~~~~~~~ //
-export function addChanges(changes) {
+export function addChanges(changes: ChangeBufferEvent[]) {
   return {
     type: ENTITY_CHANGES,
     changes,
   };
 }
 export function initialize() {
-  return async dispatch => {
+  return async (dispatch: any) => {
     const docs = await allDocs();
     dispatch(initializeWith(docs));
   };
 }
-export function initializeWith(docs) {
+export function initializeWith(docs: models.BaseModel[]) {
   return {
     type: ENTITY_INITIALIZE,
     docs,
@@ -183,6 +200,7 @@ export async function allDocs() {
     ...(await models.requestVersion.all()),
     ...(await models.response.all()),
     ...(await models.oAuth2Token.all()),
+    ...(await models.caCertificate.all()),
     ...(await models.clientCertificate.all()),
     ...(await models.apiSpec.all()),
     ...(await models.unitTestSuite.all()),
@@ -192,5 +210,8 @@ export async function allDocs() {
     ...(await models.protoDirectory.all()),
     ...(await models.grpcRequest.all()),
     ...(await models.grpcRequestMeta.all()),
+    ...(await models.webSocketPayload.all()),
+    ...(await models.webSocketRequest.all()),
+    ...(await models.webSocketResponse.all()),
   ];
 }

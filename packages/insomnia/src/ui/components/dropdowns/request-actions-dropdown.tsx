@@ -1,11 +1,11 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
 import classnames from 'classnames';
-import { HotKeyRegistry } from 'insomnia-common';
-import { noop } from 'ramda-adjunct';
-import React, { PureComponent } from 'react';
+import { clipboard } from 'electron';
+import HTTPSnippet from 'httpsnippet';
+import React, { forwardRef, useCallback, useState } from 'react';
+import { useSelector } from 'react-redux';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
-import { hotKeyRefs } from '../../../common/hotkeys';
+import { exportHarRequest } from '../../../common/har';
+import { toKebabCase } from '../../../common/misc';
 import { RENDER_PURPOSE_NO_RENDER } from '../../../common/render';
 import type { Environment } from '../../../models/environment';
 import { GrpcRequest } from '../../../models/grpc-request';
@@ -18,185 +18,203 @@ import { incrementDeletedRequests } from '../../../models/stats';
 import type { RequestAction } from '../../../plugins';
 import { getRequestActions } from '../../../plugins';
 import * as pluginContexts from '../../../plugins/context/index';
-import { Dropdown, DropdownProps } from '../base/dropdown/dropdown';
+import { updateRequestMetaByParentId } from '../../hooks/create-request';
+import { selectHotKeyRegistry } from '../../redux/selectors';
+import { type DropdownHandle, type DropdownProps, Dropdown } from '../base/dropdown/dropdown';
 import { DropdownButton } from '../base/dropdown/dropdown-button';
 import { DropdownDivider } from '../base/dropdown/dropdown-divider';
 import { DropdownHint } from '../base/dropdown/dropdown-hint';
 import { DropdownItem } from '../base/dropdown/dropdown-item';
 import { PromptButton } from '../base/prompt-button';
-import { showError } from '../modals';
+import { showError, showModal, showPrompt } from '../modals';
+import { AlertModal } from '../modals/alert-modal';
+import { GenerateCodeModal } from '../modals/generate-code-modal';
 
-interface Props extends Partial<DropdownProps> {
+interface Props extends Pick<DropdownProps, 'right'> {
+  activeEnvironment?: Environment | null;
+  activeProject: Project;
   handleDuplicateRequest: Function;
-  handleGenerateCode: Function;
-  handleCopyAsCurl: Function;
-  handleShowSettings: Function;
+  handleShowSettings: () => void;
   isPinned: Boolean;
   request: Request | GrpcRequest;
   requestGroup?: RequestGroup;
-  hotKeyRegistry: HotKeyRegistry;
-  handleSetRequestPinned: Function;
-  activeEnvironment?: Environment | null;
-  activeProject: Project;
 }
 
-// Setup state for plugin actions
-interface State {
-  actionPlugins: RequestAction[];
-  loadingActions: Record<string, boolean>;
-}
+export const RequestActionsDropdown = forwardRef<DropdownHandle, Props>(({
+  activeEnvironment,
+  activeProject,
+  handleDuplicateRequest,
+  handleShowSettings,
+  isPinned,
+  request,
+  requestGroup,
+  right,
+}, ref) => {
+  const hotKeyRegistry = useSelector(selectHotKeyRegistry);
+  const [actionPlugins, setActionPlugins] = useState<RequestAction[]>([]);
+  const [loadingActions, setLoadingActions] = useState<Record<string, boolean>>({});
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class RequestActionsDropdown extends PureComponent<Props, State> {
-  _dropdown: Dropdown | null = null;
-
-  state: State = {
-    actionPlugins: [],
-    loadingActions: {},
-  };
-
-  _setDropdownRef(n: Dropdown) {
-    this._dropdown = n;
-  }
-
-  _handleDuplicate() {
-    const { request, handleDuplicateRequest } = this.props;
-    handleDuplicateRequest(request);
-  }
-
-  _handleGenerateCode() {
-    this.props.handleGenerateCode(this.props.request);
-  }
-
-  _handleCopyAsCurl() {
-    this.props.handleCopyAsCurl(this.props.request);
-  }
-
-  _canPin() {
-    return this.props.handleSetRequestPinned !== noop;
-  }
-
-  _handleSetRequestPinned() {
-    this.props.handleSetRequestPinned(this.props.request, !this.props.isPinned);
-  }
-
-  _handleRemove() {
-    const { request } = this.props;
-    incrementDeletedRequests();
-    return requestOperations.remove(request);
-  }
-
-  async _onOpen() {
+  const onOpen = useCallback(async () => {
     const actionPlugins = await getRequestActions();
-    this.setState({ actionPlugins });
-  }
+    setActionPlugins(actionPlugins);
+  }, []);
 
-  async show() {
-    this._dropdown?.show();
-  }
-
-  async _handlePluginClick(p: RequestAction) {
-    this.setState(state => ({
-      loadingActions: { ...state.loadingActions, [p.label]: true },
-    }));
+  const handlePluginClick = useCallback(async ({ plugin, action, label }: RequestAction) => {
+    setLoadingActions({ ...loadingActions, [label]: true });
 
     try {
-      const { activeEnvironment, activeProject, request, requestGroup } = this.props;
       const activeEnvironmentId = activeEnvironment ? activeEnvironment._id : null;
       const context = {
-        ...(pluginContexts.app.init(RENDER_PURPOSE_NO_RENDER) as Record<string, any>),
+        ...(pluginContexts.app.init(RENDER_PURPOSE_NO_RENDER)),
         ...pluginContexts.data.init(activeProject._id),
-        ...(pluginContexts.store.init(p.plugin) as Record<string, any>),
-        ...(pluginContexts.network.init(activeEnvironmentId) as Record<string, any>),
+        ...(pluginContexts.store.init(plugin)),
+        ...(pluginContexts.network.init(activeEnvironmentId)),
       };
-      await p.action(context, {
+      await action(context, {
         request,
         requestGroup,
       });
-    } catch (err) {
+    } catch (error) {
       showError({
         title: 'Plugin Action Failed',
-        error: err,
+        error,
       });
     }
+    setLoadingActions({ ...loadingActions, [label]: false });
+    if (ref && 'current' in ref) { // this `in` operator statement type-narrows to `MutableRefObject`
+      ref.current?.hide();
+    }
+  }, [request, activeEnvironment, requestGroup, loadingActions, activeProject._id, ref]);
 
-    this.setState(state => ({
-      loadingActions: { ...state.loadingActions, [p.label]: false },
-    }));
-    this._dropdown?.hide();
-  }
+  const duplicate = useCallback(() => {
+    handleDuplicateRequest(request);
+  }, [handleDuplicateRequest, request]);
 
-  render() {
-    const {
-      request,
-      // eslint-disable-line @typescript-eslint/no-unused-vars
-      handleShowSettings,
-      hotKeyRegistry,
-      ...other
-    } = this.props;
-    const { actionPlugins, loadingActions } = this.state;
-    // Can only generate code for regular requests, not gRPC requests
-    const canGenerateCode = isRequest(request);
-    return (
-      <Dropdown ref={this._setDropdownRef} onOpen={this._onOpen} {...other}>
-        <DropdownButton>
-          <i className="fa fa-caret-down" />
-        </DropdownButton>
+  const generateCode = useCallback(() => {
+    if (isRequest(request)) {
+      showModal(GenerateCodeModal, { request });
+    }
+  }, [request]);
 
-        <DropdownItem onClick={this._handleDuplicate}>
-          <i className="fa fa-copy" /> Duplicate
-          <DropdownHint keyBindings={hotKeyRegistry[hotKeyRefs.REQUEST_SHOW_DUPLICATE.id]} />
+  const copyAsCurl = useCallback(async () => {
+    try {
+      const environmentId = activeEnvironment ? activeEnvironment._id : 'n/a';
+      const har = await exportHarRequest(request._id, environmentId);
+      const snippet = new HTTPSnippet(har);
+      const cmd = snippet.convert('shell', 'curl');
+
+      if (cmd) {
+        clipboard.writeText(cmd);
+      }
+    } catch (err) {
+      showModal(AlertModal, {
+        title: 'Could not generate cURL',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  }, [activeEnvironment, request._id]);
+
+  const handleRename = useCallback(() => {
+    showPrompt({
+      title: 'Rename Request',
+      defaultValue: request.name,
+      submitName: 'Rename',
+      selectText: true,
+      label: 'Name',
+      onComplete: name => {
+        requestOperations.update(request, { name });
+      },
+    });
+  }, [request]);
+
+  const togglePin = useCallback(() => {
+    updateRequestMetaByParentId(request._id, { pinned: !isPinned });
+  }, [isPinned, request]);
+
+  const deleteRequest = useCallback(() => {
+    incrementDeletedRequests();
+    requestOperations.remove(request);
+  }, [request]);
+
+  // Can only generate code for regular requests, not gRPC requests
+  const canGenerateCode = isRequest(request);
+  return (
+    <Dropdown right={right} ref={ref} onOpen={onOpen} dataTestId={`Dropdown-${toKebabCase(request.name)}`}>
+      <DropdownButton>
+        <i className="fa fa-caret-down" />
+      </DropdownButton>
+
+      <DropdownItem onClick={duplicate}>
+        <i className="fa fa-copy" /> Duplicate
+        <DropdownHint keyBindings={hotKeyRegistry.request_showDuplicate} />
+      </DropdownItem>
+
+      {canGenerateCode && (
+        <DropdownItem
+          dataTestId={`DropdownItemGenerateCode-${toKebabCase(request.name)}`}
+          onClick={generateCode}
+        >
+          <i className="fa fa-code" /> Generate Code
+          <DropdownHint
+            keyBindings={hotKeyRegistry.request_showGenerateCodeEditor}
+          />
         </DropdownItem>
+      )}
 
-        {canGenerateCode && (
-          <DropdownItem onClick={this._handleGenerateCode}>
-            <i className="fa fa-code" /> Generate Code
-            <DropdownHint
-              keyBindings={hotKeyRegistry[hotKeyRefs.REQUEST_SHOW_GENERATE_CODE_EDITOR.id]}
-            />
-          </DropdownItem>
-        )}
+      <DropdownItem dataTestId={`DropdownItemPinRequest-${toKebabCase(request.name)}`} onClick={togglePin}>
+        <i className="fa fa-thumb-tack" /> {isPinned ? 'Unpin' : 'Pin'}
+        <DropdownHint keyBindings={hotKeyRegistry.request_togglePin} />
+      </DropdownItem>
 
-        <DropdownItem onClick={this._handleSetRequestPinned}>
-          <i className="fa fa-thumb-tack" /> {this.props.isPinned ? 'Unpin' : 'Pin'}
-          <DropdownHint keyBindings={hotKeyRegistry[hotKeyRefs.REQUEST_TOGGLE_PIN.id]} />
+      {canGenerateCode && (
+        <DropdownItem
+          dataTestId={`DropdownItemCopyAsCurl-${toKebabCase(request.name)}`}
+          onClick={copyAsCurl}
+        >
+          <i className="fa fa-copy" /> Copy as Curl
         </DropdownItem>
+      )}
 
-        {canGenerateCode && (
-          <DropdownItem onClick={this._handleCopyAsCurl}>
-            <i className="fa fa-copy" /> Copy as Curl
-          </DropdownItem>
-        )}
+      <DropdownItem
+        dataTestId={`DropdownItemRename-${toKebabCase(request.name)}`}
+        onClick={handleRename}
+      >
+        <i className="fa fa-edit" /> Rename
+      </DropdownItem>
 
-        <DropdownItem buttonClass={PromptButton} onClick={this._handleRemove} addIcon>
-          <i className="fa fa-trash-o" /> Delete
-          <DropdownHint keyBindings={hotKeyRegistry[hotKeyRefs.REQUEST_SHOW_DELETE.id]} />
+      <DropdownItem
+        dataTestId={`DropdownItemDelete-${toKebabCase(request.name)}`}
+        buttonClass={PromptButton}
+        onClick={deleteRequest}
+      >
+        <i className="fa fa-trash-o" /> Delete
+        <DropdownHint keyBindings={hotKeyRegistry.request_showDelete} />
+      </DropdownItem>
+
+      {actionPlugins.length > 0 && <DropdownDivider>Plugins</DropdownDivider>}
+      {actionPlugins.map((plugin: RequestAction) => (
+        <DropdownItem
+          key={`${plugin.plugin.name}::${plugin.label}`}
+          onClick={() => handlePluginClick(plugin)}
+          stayOpenAfterClick
+        >
+          {loadingActions[plugin.label] ? (
+            <i className="fa fa-refresh fa-spin" />
+          ) : (
+            <i className={classnames('fa', plugin.icon || 'fa-code')} />
+          )}
+          {plugin.label}
         </DropdownItem>
+      ))}
 
-        {actionPlugins.length > 0 && <DropdownDivider>Plugins</DropdownDivider>}
-        {actionPlugins.map((plugin: RequestAction) => (
-          <DropdownItem
-            key={`${plugin.plugin.name}::${plugin.label}`}
-            value={plugin}
-            onClick={this._handlePluginClick}
-            stayOpenAfterClick
-          >
-            {loadingActions[plugin.label] ? (
-              <i className="fa fa-refresh fa-spin" />
-            ) : (
-              <i className={classnames('fa', plugin.icon || 'fa-code')} />
-            )}
-            {plugin.label}
-          </DropdownItem>
-        ))}
+      <DropdownDivider />
 
-        <DropdownDivider />
+      <DropdownItem onClick={handleShowSettings} dataTestId={`DropdownItemSettings-${toKebabCase(request.name)}`}>
+        <i className="fa fa-wrench" /> Settings
+        <DropdownHint keyBindings={hotKeyRegistry.request_showSettings} />
+      </DropdownItem>
+    </Dropdown>
+  );
+});
 
-        <DropdownItem onClick={handleShowSettings}>
-          <i className="fa fa-wrench" /> Settings
-          <DropdownHint keyBindings={hotKeyRegistry[hotKeyRefs.REQUEST_SHOW_SETTINGS.id]} />
-        </DropdownItem>
-      </Dropdown>
-    );
-  }
-}
+RequestActionsDropdown.displayName = 'RequestActionsDropdown';

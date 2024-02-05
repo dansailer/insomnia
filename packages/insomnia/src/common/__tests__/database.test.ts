@@ -1,3 +1,5 @@
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+
 import { globalBeforeEach } from '../../__jest__/before-each';
 import * as models from '../../models';
 import { data as fixtures } from '../__fixtures__/nestedfolders';
@@ -50,8 +52,8 @@ describe('onChange()', () => {
     });
     expect(changesSeen.length).toBe(2);
     expect(changesSeen).toEqual([
-      [[db.CHANGE_INSERT, newDoc, false]],
-      [[db.CHANGE_UPDATE, updatedDoc, false]],
+      [['insert', newDoc, false]],
+      [['update', updatedDoc, false]],
     ]);
     db.offChange(callback);
     await models.request.create(doc);
@@ -85,16 +87,16 @@ describe('bufferChanges()', () => {
     await db.flushChanges();
     expect(changesSeen).toEqual([
       [
-        [db.CHANGE_INSERT, newDoc, false],
-        [db.CHANGE_UPDATE, updatedDoc, false],
+        ['insert', newDoc, false],
+        ['update', updatedDoc, false],
       ],
     ]);
     // Assert no more changes seen after flush again
     await db.flushChanges();
     expect(changesSeen).toEqual([
       [
-        [db.CHANGE_INSERT, newDoc, false],
-        [db.CHANGE_UPDATE, updatedDoc, false],
+        ['insert', newDoc, false],
+        ['update', updatedDoc, false],
       ],
     ]);
   });
@@ -120,8 +122,8 @@ describe('bufferChanges()', () => {
     await new Promise(resolve => setTimeout(resolve, 1500));
     expect(changesSeen).toEqual([
       [
-        [db.CHANGE_INSERT, newDoc, false],
-        [db.CHANGE_UPDATE, updatedDoc, false],
+        ['insert', newDoc, false],
+        ['update', updatedDoc, false],
       ],
     ]);
   });
@@ -146,8 +148,8 @@ describe('bufferChanges()', () => {
     await new Promise(resolve => setTimeout(resolve, 1000));
     expect(changesSeen).toEqual([
       [
-        [db.CHANGE_INSERT, newDoc, false],
-        [db.CHANGE_UPDATE, updatedDoc, false],
+        ['insert', newDoc, false],
+        ['update', updatedDoc, false],
       ],
     ]);
   });
@@ -181,8 +183,8 @@ describe('bufferChangesIndefinitely()', () => {
     await db.flushChanges();
     expect(changesSeen).toEqual([
       [
-        [db.CHANGE_INSERT, newDoc, false],
-        [db.CHANGE_UPDATE, updatedDoc, false],
+        ['insert', newDoc, false],
+        ['update', updatedDoc, false],
       ],
     ]);
   });
@@ -662,6 +664,7 @@ describe('_repairDatabase()', () => {
 
 describe('duplicate()', () => {
   beforeEach(globalBeforeEach);
+
   afterEach(() => jest.restoreAllMocks());
 
   it('should overwrite appropriate fields on the parent when duplicating', async () => {

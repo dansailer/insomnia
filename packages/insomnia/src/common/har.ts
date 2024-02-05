@@ -1,11 +1,8 @@
 import clone from 'clone';
 import fs from 'fs';
-import { jarFromCookies } from 'insomnia-cookies';
-import { smartEncodeUrl } from 'insomnia-url';
-import { Cookie as toughCookie } from 'tough-cookie';
+import { Cookie as ToughCookie } from 'tough-cookie';
 
 import * as models from '../models';
-import type { Cookie } from '../models/cookie-jar';
 import type { Request } from '../models/request';
 import { newBodyRaw } from '../models/request';
 import type { Response } from '../models/response';
@@ -14,7 +11,9 @@ import { getAuthHeader } from '../network/authentication';
 import * as plugins from '../plugins';
 import * as pluginContexts from '../plugins/context/index';
 import { RenderError } from '../templating/index';
+import { smartEncodeUrl } from '../utils/url/querystring';
 import { getAppVersion } from './constants';
+import { jarFromCookies } from './cookies';
 import { database } from './database';
 import { filterHeaders, getSetCookieHeaders, hasAuthHeader } from './misc';
 import type { RenderedRequest } from './render';
@@ -420,10 +419,10 @@ function getResponseCookies(response: Response) {
   const headers = response.headers.filter(Boolean) as HarCookie[];
   const responseCookies = getSetCookieHeaders(headers)
     .reduce((accumulator, harCookie) => {
-      let cookie: null | undefined | toughCookie = null;
+      let cookie: null | undefined | ToughCookie = null;
 
       try {
-        cookie = toughCookie.parse(harCookie.value || '');
+        cookie = ToughCookie.parse(harCookie.value || '');
       } catch (error) {}
 
       if (cookie === null || cookie === undefined) {
@@ -432,13 +431,13 @@ function getResponseCookies(response: Response) {
 
       return [
         ...accumulator,
-        mapCookie(cookie as unknown as Cookie),
+        mapCookie(cookie),
       ];
     }, [] as HarCookie[]);
   return responseCookies;
 }
 
-function mapCookie(cookie: Cookie) {
+function mapCookie(cookie: ToughCookie) {
   const harCookie: HarCookie = {
     name: cookie.key,
     value: cookie.value,
@@ -486,9 +485,8 @@ function getResponseContent(response: Response) {
   if (body === null) {
     body = Buffer.alloc(0);
   }
-
   const harContent: HarContent = {
-    size: body.byteLength,
+    size: Buffer.byteLength(body),
     mimeType: response.contentType,
     text: body.toString('utf8'),
   };
@@ -526,8 +524,8 @@ function getRequestPostData(renderedRequest: RenderedRequest): HarPostData | und
   if (renderedRequest.body.fileName) {
     try {
       body = newBodyRaw(fs.readFileSync(renderedRequest.body.fileName, 'base64'));
-    } catch (e) {
-      console.warn('[code gen] Failed to read file', e);
+    } catch (error) {
+      console.warn('[code gen] Failed to read file', error);
       return;
     }
   } else {
@@ -535,7 +533,7 @@ function getRequestPostData(renderedRequest: RenderedRequest): HarPostData | und
     body = renderedRequest.body;
   }
 
-  let params = [];
+  let params: any[] = [];
 
   if (body.params) {
     params = body.params.map(param => {

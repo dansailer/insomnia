@@ -1,3 +1,4 @@
+import { beforeEach, describe, expect, it } from '@jest/globals';
 import { render } from '@testing-library/react';
 import React from 'react';
 import configureMockStore from 'redux-mock-store';
@@ -33,10 +34,5 @@ describe('<BooleanSetting />', () => {
   it('should render label text', async () => {
     const { getByLabelText } = render(booleanSetting, container);
     expect(getByLabelText(label)).toBeInTheDocument();
-  });
-
-  it('should render help text', async () => {
-    const { getByText } = render(booleanSetting, container);
-    expect(getByText(help)).toBeInTheDocument();
   });
 });

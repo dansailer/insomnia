@@ -1,8 +1,10 @@
-import { Button } from 'insomnia-components';
 import React, { ChangeEvent, FC, ReactNode, useCallback, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { convertEpochToMilliseconds, toKebabCase } from '../../../../common/misc';
+import {
+  RENDER_PURPOSE_SEND,
+} from '../../../../common/render';
 import accessTokenUrls from '../../../../datasets/access-token-urls';
 import authorizationUrls from '../../../../datasets/authorization-urls';
 import * as models from '../../../../models';
@@ -25,9 +27,9 @@ import { useNunjucks } from '../../../context/nunjucks/use-nunjucks';
 import { useActiveRequest } from '../../../hooks/use-active-request';
 import { selectActiveOAuth2Token } from '../../../redux/selectors';
 import { Link } from '../../base/link';
-import { PromptButton } from '../../base/prompt-button';
 import { showModal } from '../../modals';
 import { ResponseDebugModal } from '../../modals/response-debug-modal';
+import { Button } from '../../themed-button';
 import { TimeFromNow } from '../../time-from-now';
 import { AuthAccordion } from './components/auth-accordion';
 import { AuthInputRow } from './components/auth-input-row';
@@ -256,6 +258,7 @@ export const OAuth2Auth: FC = () => {
   return (
     <>
       <AuthTableBody>
+        <AuthToggleRow label="Enabled" property="disabled" invert />
         <AuthSelectRow
           label='Grant Type'
           property='grantType'
@@ -439,7 +442,7 @@ const useActiveOAuth2Token = () => {
     setLoading(true);
 
     try {
-      const renderedAuthentication = await handleRender(authentication);
+      const renderedAuthentication = await handleRender(authentication, null, RENDER_PURPOSE_SEND);
       await getAccessToken(requestId, renderedAuthentication, true);
       setLoading(false);
     } catch (err) {
@@ -469,9 +472,9 @@ const OAuth2Tokens: FC = () => {
       <OAuth2TokenInput label='Access Token' property='accessToken' />
       <div className='pad-top text-right'>
         {token ? (
-          <PromptButton className="btn btn--clicky" onClick={clearTokens}>
+          <button className="btn btn--clicky" onClick={clearTokens}>
             Clear
-          </PromptButton>
+          </button>
         ) : null}
         &nbsp;&nbsp;
         <button

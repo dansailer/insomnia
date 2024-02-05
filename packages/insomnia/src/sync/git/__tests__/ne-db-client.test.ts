@@ -1,4 +1,5 @@
 import { createBuilder } from '@develohpanda/fluent-builder';
+import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import path from 'path';
 import YAML from 'yaml';
 
@@ -56,6 +57,8 @@ describe('NeDBClient', () => {
         models.requestGroup.type,
         models.unitTest.type,
         models.unitTestSuite.type,
+        models.webSocketPayload.type,
+        models.webSocketRequest.type,
         models.workspace.type,
       ]);
       expect(await neDbClient.readdir(reqDir)).toEqual(['req_1.yml', 'req_2.yml']);

@@ -9,10 +9,13 @@ import {
   EXPORT_TYPE_REQUEST_GROUP,
   EXPORT_TYPE_UNIT_TEST,
   EXPORT_TYPE_UNIT_TEST_SUITE,
+  EXPORT_TYPE_WEBSOCKET_PAYLOAD,
+  EXPORT_TYPE_WEBSOCKET_REQUEST,
   EXPORT_TYPE_WORKSPACE,
 } from '../common/constants';
 import { generateId, pluralize } from '../common/misc';
 import * as _apiSpec from './api-spec';
+import * as _caCertificate from './ca-certificate';
 import * as _clientCertificate from './client-certificate';
 import * as _cookieJar from './cookie-jar';
 import * as _environment from './environment';
@@ -35,6 +38,9 @@ import * as _stats from './stats';
 import * as _unitTest from './unit-test';
 import * as _unitTestResult from './unit-test-result';
 import * as _unitTestSuite from './unit-test-suite';
+import * as _webSocketPayload from './websocket-payload';
+import * as _webSocketRequest from './websocket-request';
+import * as _webSocketResponse from './websocket-response';
 import * as _workspace from './workspace';
 import * as _workspaceMeta from './workspace-meta';
 
@@ -54,6 +60,7 @@ export interface BaseModel {
 // Reference to each model
 export const apiSpec = _apiSpec;
 export const clientCertificate = _clientCertificate;
+export const caCertificate = _caCertificate;
 export const cookieJar = _cookieJar;
 export const environment = _environment;
 export const gitRepository = _gitRepository;
@@ -75,8 +82,12 @@ export const protoFile = _protoFile;
 export const protoDirectory = _protoDirectory;
 export const grpcRequest = _grpcRequest;
 export const grpcRequestMeta = _grpcRequestMeta;
+export const webSocketPayload = _webSocketPayload;
+export const webSocketRequest = _webSocketRequest;
+export const webSocketResponse = _webSocketResponse;
 export const workspace = _workspace;
 export const workspaceMeta = _workspaceMeta;
+export * as organization from './organization';
 
 export function all() {
   // NOTE: This list should be from most to least specific (ie. parents above children)
@@ -99,6 +110,7 @@ export function all() {
     requestMeta,
     response,
     oAuth2Token,
+    caCertificate,
     clientCertificate,
     pluginData,
     unitTestSuite,
@@ -108,6 +120,9 @@ export function all() {
     protoDirectory,
     grpcRequest,
     grpcRequestMeta,
+    webSocketPayload,
+    webSocketRequest,
+    webSocketResponse,
   ] as const;
 }
 
@@ -196,6 +211,7 @@ export async function initModel<T extends BaseModel>(type: string, ...sources: R
   // Prune extra keys from doc
   for (const key of Object.keys(migratedDoc)) {
     if (!objectDefaults.hasOwnProperty(key)) {
+      // @ts-expect-error -- mapping unsoundness
       delete migratedDoc[key];
     }
   }
@@ -204,8 +220,10 @@ export async function initModel<T extends BaseModel>(type: string, ...sources: R
   return migratedDoc;
 }
 
-export const MODELS_BY_EXPORT_TYPE = {
+export const MODELS_BY_EXPORT_TYPE: Record<string, any> = {
   [EXPORT_TYPE_REQUEST]: request,
+  [EXPORT_TYPE_WEBSOCKET_PAYLOAD]: webSocketPayload,
+  [EXPORT_TYPE_WEBSOCKET_REQUEST]: webSocketRequest,
   [EXPORT_TYPE_GRPC_REQUEST]: grpcRequest,
   [EXPORT_TYPE_REQUEST_GROUP]: requestGroup,
   [EXPORT_TYPE_UNIT_TEST_SUITE]: unitTestSuite,

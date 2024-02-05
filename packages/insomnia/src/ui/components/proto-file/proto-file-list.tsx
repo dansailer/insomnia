@@ -1,9 +1,9 @@
-import { ListGroup, ListGroupItem } from 'insomnia-components';
 import React, { FunctionComponent } from 'react';
 
 import { ProtoDirectory } from '../../../models/proto-directory';
 import type { ProtoFile } from '../../../models/proto-file';
 import type { ExpandedProtoDirectory } from '../../redux/proto-selectors';
+import { ListGroup, ListGroupItem } from '../list-group';
 import { ProtoDirectoryListItem } from './proto-directory-list-item';
 import { ProtoFileListItem } from './proto-file-list-item';
 
@@ -11,7 +11,7 @@ export type SelectProtoFileHandler = (id: string) => void;
 export type DeleteProtoFileHandler = (protofile: ProtoFile) => Promise<void>;
 export type DeleteProtoDirectoryHandler = (protoDirectory: ProtoDirectory) => Promise<void>;
 export type UpdateProtoFileHandler = (protofile: ProtoFile) => Promise<void>;
-export type RenameProtoFileHandler = (protoFile: ProtoFile, name: string) => Promise<void>;
+export type RenameProtoFileHandler = (protoFile: ProtoFile, name?: string) => Promise<void>;
 
 interface Props {
   protoDirectories: ExpandedProtoDirectory[];
@@ -27,7 +27,7 @@ const recursiveRender = (
   { dir, files, subDirs }: ExpandedProtoDirectory,
   props: Props,
   indent: number,
-) => {
+): React.ReactNode => {
   const {
     handleDelete,
     handleDeleteDirectory,

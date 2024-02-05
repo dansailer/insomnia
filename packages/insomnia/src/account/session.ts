@@ -5,6 +5,39 @@ import * as fetch from './fetch';
 
 type LoginCallback = (isLoggedIn: boolean) => void;
 
+export interface WhoamiResponse {
+  sessionAge: number;
+  accountId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  created: number;
+  publicKey: string;
+  encSymmetricKey: string;
+  encPrivateKey: string;
+  saltEnc: string;
+  isPaymentRequired: boolean;
+  isTrialing: boolean;
+  isVerified: boolean;
+  isAdmin: boolean;
+  trialEnd: string;
+  planName: string;
+  planId: string;
+  canManageTeams: boolean;
+  maxTeamMembers: number;
+}
+
+export interface SessionData {
+  accountId: string;
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  symmetricKey: JsonWebKey;
+  publicKey: JsonWebKey;
+  encPrivateKey: crypt.AESMessage;
+}
+
 const loginCallbacks: LoginCallback[] = [];
 
 function _callCallbacks() {
@@ -22,72 +55,19 @@ export function onLoginLogout(loginCallback: LoginCallback) {
   loginCallbacks.push(loginCallback);
 }
 
-/** Create a new session for the user */
-export async function login(rawEmail: string, rawPassphrase: string) {
-  // ~~~~~~~~~~~~~~~ //
-  // Sanitize Inputs //
-  // ~~~~~~~~~~~~~~~ //
-  const email = _sanitizeEmail(rawEmail);
-
-  const passphrase = _sanitizePassphrase(rawPassphrase);
-
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  // Fetch Salt and Submit A To Server //
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  const { saltKey, saltAuth } = await _getAuthSalts(email);
-  const authSecret = await crypt.deriveKey(passphrase, email, saltKey);
-  const secret1 = await crypt.srpGenKey();
-  const c = new srp.Client(
-    _getSrpParams(),
-    Buffer.from(saltAuth, 'hex'),
-    Buffer.from(email, 'utf8'),
-    Buffer.from(authSecret, 'hex'),
-    // @ts-expect-error -- TSCONVERSION missing type from srpGenKey
-    Buffer.from(secret1, 'hex'),
-  );
-  const srpA = c.computeA().toString('hex');
-  const { sessionStarterId, srpB } = await fetch.post(
-    '/auth/login-a',
-    {
-      srpA,
-      email,
-    },
-    null,
-  );
-  // ~~~~~~~~~~~~~~~~~~~~~ //
-  // Compute and Submit M1 //
-  // ~~~~~~~~~~~~~~~~~~~~~ //
-  c.setB(Buffer.from(srpB, 'hex'));
-  const srpM1 = c.computeM1().toString('hex');
-  const { srpM2 } = await fetch.post(
-    '/auth/login-m1',
-    {
-      srpM1,
-      sessionStarterId,
-    },
-    null,
-  );
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  // Verify Server Identity M2 //
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  c.checkM2(Buffer.from(srpM2, 'hex'));
-  // ~~~~~~~~~~~~~~~~~~~~~~ //
-  // Initialize the Session //
-  // ~~~~~~~~~~~~~~~~~~~~~~ //
-  // Compute K (used for session ID)
-  const sessionId = c.computeK().toString('hex');
+/** Creates a session from a sessionId and derived symmetric key. */
+export async function absorbKey(sessionId: string, key: string) {
   // Get and store some extra info (salts and keys)
   const {
     publicKey,
     encPrivateKey,
     encSymmetricKey,
-    saltEnc,
+    email,
     accountId,
     firstName,
     lastName,
   } = await _whoami(sessionId);
-  const derivedSymmetricKey = await crypt.deriveKey(passphrase, email, saltEnc);
-  const symmetricKeyStr = await crypt.decryptAES(derivedSymmetricKey, JSON.parse(encSymmetricKey));
+  const symmetricKeyStr = crypt.decryptAES(key, JSON.parse(encSymmetricKey));
   // Store the information for later
   setSessionData(
     sessionId,
@@ -103,11 +83,15 @@ export async function login(rawEmail: string, rawPassphrase: string) {
   _callCallbacks();
 }
 
-export async function changePasswordWithToken(rawNewPassphrase, confirmationCode) {
+export async function changePasswordWithToken(rawNewPassphrase: string, confirmationCode: string) {
   // Sanitize inputs
   const newPassphrase = _sanitizePassphrase(rawNewPassphrase);
 
   const newEmail = getEmail(); // Use the same one
+
+  if (!newEmail) {
+    throw new Error('Session e-mail unexpectedly not set');
+  }
 
   // Fetch some things
   const { saltEnc, encSymmetricKey } = await _whoami();
@@ -119,7 +103,7 @@ export async function changePasswordWithToken(rawNewPassphrase, confirmationCode
     .computeVerifier(
       _getSrpParams(),
       Buffer.from(saltAuth, 'hex'),
-      Buffer.from(newEmail, 'utf8'),
+      Buffer.from(newEmail || '', 'utf8'),
       Buffer.from(newAuthSecret, 'hex'),
     )
     .toString('hex');
@@ -145,11 +129,21 @@ export function sendPasswordChangeCode() {
 }
 
 export function getPublicKey() {
-  return _getSessionData().publicKey;
+  return _getSessionData()?.publicKey;
 }
 
 export function getPrivateKey() {
-  const { symmetricKey, encPrivateKey } = _getSessionData();
+  const sessionData = _getSessionData();
+
+  if (!sessionData) {
+    throw new Error("Can't get private key: session is blank.");
+  }
+
+  const { symmetricKey, encPrivateKey } = sessionData;
+
+  if (!symmetricKey || !encPrivateKey) {
+    throw new Error("Can't get private key: session is missing keys.");
+  }
 
   const privateKeyStr = crypt.decryptAES(symmetricKey, encPrivateKey);
   return JSON.parse(privateKeyStr);
@@ -164,19 +158,19 @@ export function getCurrentSessionId() {
 }
 
 export function getAccountId() {
-  return _getSessionData().accountId;
+  return _getSessionData()?.accountId;
 }
 
 export function getEmail() {
-  return _getSessionData().email;
+  return _getSessionData()?.email;
 }
 
 export function getFirstName() {
-  return _getSessionData().firstName;
+  return _getSessionData()?.firstName;
 }
 
 export function getLastName() {
-  return _getSessionData().lastName;
+  return _getSessionData()?.lastName;
 }
 
 export function getFullName() {
@@ -192,10 +186,10 @@ export function isLoggedIn() {
 export async function logout() {
   try {
     await fetch.post('/auth/logout', null, getCurrentSessionId());
-  } catch (e) {
+  } catch (error) {
     // Not a huge deal if this fails, but we don't want it to prevent the
     // user from signing out.
-    console.warn('Failed to logout', e);
+    console.warn('Failed to logout', error);
   }
 
   _unsetSessionData();
@@ -205,16 +199,16 @@ export async function logout() {
 
 /** Set data for the new session and store it encrypted with the sessionId */
 export function setSessionData(
-  sessionId,
-  accountId,
-  firstName,
-  lastName,
-  email,
-  symmetricKey,
-  publicKey,
-  encPrivateKey,
+  sessionId: string,
+  accountId: string,
+  firstName: string,
+  lastName: string,
+  email: string,
+  symmetricKey: JsonWebKey,
+  publicKey: JsonWebKey,
+  encPrivateKey: crypt.AESMessage,
 ) {
-  const dataStr = JSON.stringify({
+  const sessionData: SessionData = {
     id: sessionId,
     accountId: accountId,
     symmetricKey: symmetricKey,
@@ -223,7 +217,8 @@ export function setSessionData(
     email: email,
     firstName: firstName,
     lastName: lastName,
-  });
+  };
+  const dataStr = JSON.stringify(sessionData);
   window.localStorage.setItem(_getSessionKey(sessionId), dataStr);
   // NOTE: We're setting this last because the stuff above might fail
   window.localStorage.setItem('currentSessionId', sessionId);
@@ -231,24 +226,19 @@ export function setSessionData(
 export async function listTeams() {
   return fetch.get('/api/teams', getCurrentSessionId());
 }
-export async function endTrial() {
-  await fetch.put('/api/billing/end-trial', null, getCurrentSessionId());
-}
 
 // ~~~~~~~~~~~~~~~~ //
 // Helper Functions //
 // ~~~~~~~~~~~~~~~~ //
 function _getSymmetricKey() {
-  const sessionData = _getSessionData();
-
-  return sessionData.symmetricKey;
+  return _getSessionData()?.symmetricKey;
 }
 
-function _whoami(sessionId = null) {
-  return fetch.get('/auth/whoami', sessionId || getCurrentSessionId());
+function _whoami(sessionId: string | null = null): Promise<WhoamiResponse> {
+  return fetch.getJson<WhoamiResponse>('/auth/whoami', sessionId || getCurrentSessionId());
 }
 
-function _getAuthSalts(email) {
+function _getAuthSalts(email: string) {
   return fetch.post(
     '/auth/login-s',
     {
@@ -258,7 +248,7 @@ function _getAuthSalts(email) {
   );
 }
 
-const _getSessionData = () => {
+const _getSessionData = (): Partial<SessionData> | null => {
   const sessionId = getCurrentSessionId();
 
   if (!sessionId || !window) {
@@ -269,7 +259,7 @@ const _getSessionData = () => {
   if (dataStr === null) {
     return null;
   }
-  return JSON.parse(dataStr);
+  return JSON.parse(dataStr) as SessionData;
 };
 
 function _unsetSessionData() {
@@ -284,10 +274,6 @@ function _getSessionKey(sessionId: string | null) {
 
 function _getSrpParams() {
   return srp.params[2048];
-}
-
-function _sanitizeEmail(email: string) {
-  return email.trim().toLowerCase();
 }
 
 function _sanitizePassphrase(passphrase: string) {

@@ -1,5 +1,6 @@
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import electron from 'electron';
-import { mocked } from 'ts-jest/utils';
+import { mocked } from 'jest-mock';
 
 import appPackageJson from '../../../../package.json';
 import { globalBeforeEach } from '../../../__jest__/before-each';
@@ -90,7 +91,6 @@ describe('app.prompt()', () => {
         {
           title: 'Title',
           onComplete: expect.any(Function),
-          onCancel: expect.any(Function),
           onHide: expect.any(Function),
         },
       ],
@@ -99,7 +99,6 @@ describe('app.prompt()', () => {
           title: 'Title',
           label: 'Label',
           onComplete: expect.any(Function),
-          onCancel: expect.any(Function),
           onHide: expect.any(Function),
         },
       ],

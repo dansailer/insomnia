@@ -1,5 +1,5 @@
 import { createSelector } from 'reselect';
-import { ValueOf } from 'type-fest';
+import type { ValueOf } from 'type-fest';
 
 import { isWorkspaceActivity, PREVIEW_MODE_SOURCE } from '../../common/constants';
 import * as models from '../../models';
@@ -10,7 +10,10 @@ import { sortProjects } from '../../models/helpers/project';
 import { DEFAULT_PROJECT_ID, isRemoteProject } from '../../models/project';
 import { isRequest, Request } from '../../models/request';
 import { isRequestGroup, RequestGroup } from '../../models/request-group';
+import { type Response } from '../../models/response';
 import { UnitTestResult } from '../../models/unit-test-result';
+import { isWebSocketRequest, WebSocketRequest } from '../../models/websocket-request';
+import { type WebSocketResponse } from '../../models/websocket-response';
 import { isCollection } from '../../models/workspace';
 import { RootState } from './modules';
 
@@ -34,10 +37,10 @@ export const selectGlobal = createSelector(
 export const selectEntitiesLists = createSelector(
   selectEntities,
   entities => {
-    const entitiesLists = {};
+    const entitiesLists: any = {};
 
     for (const k of Object.keys(entities)) {
-      const entityMap = entities[k];
+      const entityMap = (entities as any)[k];
       entitiesLists[k] = Object.keys(entityMap).map(id => entityMap[id]);
     }
 
@@ -46,18 +49,18 @@ export const selectEntitiesLists = createSelector(
 );
 
 export const selectEntitiesChildrenMap = createSelector(selectEntitiesLists, entities => {
-  const parentLookupMap = {};
+  const parentLookupMap: any = {};
 
-  for (const k of Object.keys(entities)) {
-    for (const e of entities[k]) {
-      if (!e.parentId) {
+  for (const key of Object.keys(entities)) {
+    for (const entity of (entities as any)[key]) {
+      if (!entity.parentId) {
         continue;
       }
 
-      if (parentLookupMap[e.parentId]) {
-        parentLookupMap[e.parentId].push(e);
+      if (parentLookupMap[entity.parentId]) {
+        parentLookupMap[entity.parentId].push(entity);
       } else {
-        parentLookupMap[e.parentId] = [e];
+        parentLookupMap[entity.parentId] = [entity];
       }
     }
   }
@@ -289,7 +292,7 @@ export const selectActiveWorkspaceEntities = createSelector(
 
     const descendants: BaseModel[] = [activeWorkspace];
 
-    const addChildrenOf = parent => {
+    const addChildrenOf = (parent: any) => {
       // Don't add children of requests (eg. auth requests)
       if (isRequest(parent)) {
         return;
@@ -311,7 +314,7 @@ export const selectActiveWorkspaceEntities = createSelector(
 
 export const selectPinnedRequests = createSelector(selectEntitiesLists, entities => {
   const pinned: Record<string, boolean> = {};
-  const requests = [...entities.requests, ...entities.grpcRequests];
+  const requests = [...entities.requests, ...entities.grpcRequests, ...entities.webSocketRequests];
   const requestMetas = [...entities.requestMetas, ...entities.grpcRequestMetas];
 
   // Default all to unpinned
@@ -331,8 +334,8 @@ export const selectWorkspaceRequestsAndRequestGroups = createSelector(
   selectActiveWorkspaceEntities,
   entities => {
     return entities.filter(
-      e => isRequest(e) || isGrpcRequest(e) || isRequestGroup(e),
-    ) as (Request | GrpcRequest | RequestGroup)[];
+      entity => isRequest(entity) || isWebSocketRequest(entity) || isGrpcRequest(entity) || isRequestGroup(entity),
+    ) as (Request | WebSocketRequest | GrpcRequest | RequestGroup)[];
   },
 );
 
@@ -341,13 +344,20 @@ export const selectActiveRequest = createSelector(
   selectActiveWorkspaceMeta,
   (entities, workspaceMeta) => {
     const id = workspaceMeta?.activeRequestId || 'n/a';
+
     if (id in entities.requests) {
       return entities.requests[id];
-    } else if (id in entities.grpcRequests) {
-      return entities.grpcRequests[id];
-    } else {
-      return null;
     }
+
+    if (id in entities.grpcRequests) {
+      return entities.grpcRequests[id];
+    }
+
+    if (id in entities.webSocketRequests) {
+      return entities.webSocketRequests[id];
+    }
+
+    return null;
   },
 );
 
@@ -367,17 +377,6 @@ export const selectActiveOAuth2Token = createSelector(
     const id = workspaceMeta?.activeRequestId || 'n/a';
     return entities.oAuth2Tokens.find(t => t.parentId === id);
   },
-);
-
-export const selectLoadingRequestIds = createSelector(
-  selectGlobal,
-  global => global.loadingRequestIds,
-);
-
-export const selectLoadStartTime = createSelector(
-  selectLoadingRequestIds,
-  selectActiveRequest,
-  (loadingRequestIds, activeRequest) => loadingRequestIds[activeRequest ? activeRequest._id : 'n/a'] || -1
 );
 
 export const selectUnseenWorkspaces = createSelector(
@@ -419,6 +418,11 @@ export const selectResponseDownloadPath = createSelector(
   requestMeta => requestMeta?.downloadPath || null,
 );
 
+export const selectHotKeyRegistry = createSelector(
+  selectSettings,
+  settings => settings.hotKeyRegistry,
+);
+
 export const selectActiveRequestResponses = createSelector(
   selectActiveRequest,
   selectEntitiesLists,
@@ -426,19 +430,21 @@ export const selectActiveRequestResponses = createSelector(
   selectSettings,
   (activeRequest, entities, activeEnvironment, settings) => {
     const requestId = activeRequest ? activeRequest._id : 'n/a';
-    // Filter responses down if the setting is enabled
-    return entities.responses
-      .filter(response => {
-        const requestMatches = requestId === response.parentId;
 
-        if (settings.filterResponsesByEnv) {
-          const activeEnvironmentId = activeEnvironment ? activeEnvironment._id : null;
-          const environmentMatches = response.environmentId === activeEnvironmentId;
-          return requestMatches && environmentMatches;
-        } else {
-          return requestMatches;
-        }
-      })
+    const responses: (Response | WebSocketResponse)[] = (activeRequest && isWebSocketRequest(activeRequest)) ?  entities.webSocketResponses : entities.responses;
+
+    // Filter responses down if the setting is enabled
+    return responses.filter(response => {
+      const requestMatches = requestId === response.parentId;
+
+      if (settings.filterResponsesByEnv) {
+        const activeEnvironmentId = activeEnvironment ? activeEnvironment._id : null;
+        const environmentMatches = response.environmentId === activeEnvironmentId;
+        return requestMatches && environmentMatches;
+      } else {
+        return requestMatches;
+      }
+    })
       .sort((a, b) => (a.created > b.created ? -1 : 1));
   },
 );
@@ -448,6 +454,7 @@ export const selectActiveResponse = createSelector(
   selectActiveRequestResponses,
   (activeRequestMeta, responses) => {
     const activeResponseId = activeRequestMeta ? activeRequestMeta.activeResponseId : 'n/a';
+
     const activeResponse = responses.find(response => response._id === activeResponseId);
 
     if (activeResponse) {
@@ -538,9 +545,4 @@ export const selectIsLoggedIn = createSelector(
 export const selectActiveActivity = createSelector(
   selectGlobal,
   global => global.activeActivity,
-);
-
-export const selectIsFinishedBooting = createSelector(
-  selectGlobal,
-  global => global.isFinishedBooting,
 );

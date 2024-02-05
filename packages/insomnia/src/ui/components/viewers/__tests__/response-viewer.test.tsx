@@ -1,3 +1,4 @@
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { render } from '@testing-library/react';
 import React from 'react';
 import configureMockStore from 'redux-mock-store';
@@ -10,6 +11,7 @@ import { withReduxStore } from '../../../../__jest__/with-redux-store';
 import { RootState } from '../../../redux/modules';
 import { ResponseViewer, ResponseViewerProps } from '../response-viewer';
 
+jest.mock('../../keydown-binder');
 jest.mock('../../codemirror/code-editor', () => ({
   CodeEditor: MockComponent,
 }));

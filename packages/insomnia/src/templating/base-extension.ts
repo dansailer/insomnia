@@ -10,7 +10,7 @@ const EMPTY_ARG = '__EMPTY_NUNJUCKS_ARG__';
 export default class BaseExtension {
   _ext: PluginTemplateTag | null = null;
   _plugin: Plugin | null = null;
-  tags: PluginTemplateTag['name'][] | null = null;
+  tags: PluginTemplateTag['name'][] = [];
 
   constructor(ext: PluginTemplateTag, plugin: Plugin) {
     this._ext = ext;
@@ -30,7 +30,7 @@ export default class BaseExtension {
   }
 
   getName() {
-    return this._ext?.displayName || this.getTag();
+    return typeof this._ext?.displayName === 'string' ? this._ext?.displayName : this.getTag();
   }
 
   getDescription() {
@@ -63,12 +63,12 @@ export default class BaseExtension {
     return this._ext?.deprecated || false;
   }
 
-  run(...args) {
+  run(...args: any[]) {
     // @ts-expect-error -- TSCONVERSION
     return this._ext?.run(...args);
   }
 
-  parse(parser, nodes, lexer) {
+  parse(parser: any, nodes: any, lexer: any) {
     const tok = parser.nextToken();
     let args;
 
@@ -84,7 +84,7 @@ export default class BaseExtension {
     return new nodes.CallExtensionAsync(this, 'asyncRun', args);
   }
 
-  asyncRun({ ctx: renderContext }, ...runArgs) {
+  asyncRun({ ctx: renderContext }: any, ...runArgs: any[]) {
     // Pull the callback off the end
     const callback = runArgs[runArgs.length - 1];
     // Pull out the meta helper
@@ -108,14 +108,14 @@ export default class BaseExtension {
       meta: renderMeta,
       renderPurpose,
       util: {
-        render: str =>
+        render: (str: string) =>
           templating.render(str, {
             context: renderContext,
           }),
         models: {
           request: {
             getById: models.request.getById,
-            getAncestors: async request => {
+            getAncestors: async (request: any) => {
               const ancestors = await db.withAncestors(request, [
                 models.requestGroup.type,
                 models.workspace.type,
@@ -130,7 +130,7 @@ export default class BaseExtension {
             getByRequestId: models.oAuth2Token.getByParentId,
           },
           cookieJar: {
-            getOrCreateForWorkspace: workspace => {
+            getOrCreateForWorkspace: (workspace: any) => {
               return models.cookieJar.getOrCreateForParentId(workspace._id);
             },
           },

@@ -1,46 +1,40 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import React, { PureComponent } from 'react';
+import React, { FC, SyntheticEvent, useCallback } from 'react';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
 import { GrpcRequest, isGrpcRequest } from '../../../models/grpc-request';
-import type { Request } from '../../../models/request';
+import { isRequest, Request } from '../../../models/request';
+import { isWebSocketRequest, WebSocketRequest } from '../../../models/websocket-request';
 import { GrpcTag } from '../tags/grpc-tag';
 import { MethodTag } from '../tags/method-tag';
+import { WebSocketTag } from '../tags/websocket-tag';
 
 interface Props {
   handleSetItemSelected: (...args: any[]) => any;
   isSelected: boolean;
-  request: Request | GrpcRequest;
+  request: Request | WebSocketRequest | GrpcRequest;
 }
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class RequestRow extends PureComponent<Props> {
-  handleSelect(e: React.SyntheticEvent<HTMLInputElement>) {
-    const el = e.currentTarget;
-    const value = el.checked;
-    const { handleSetItemSelected, request } = this.props;
-    return handleSetItemSelected(request._id, value);
-  }
+export const RequestRow: FC<Props> = ({
+  handleSetItemSelected,
+  request,
+  isSelected,
+}) => {
+  const onChange = useCallback((event: SyntheticEvent<HTMLInputElement>) => {
+    handleSetItemSelected(request._id, event?.currentTarget.checked);
+  }, [handleSetItemSelected, request._id]);
 
-  render() {
-    const { request, isSelected } = this.props;
-    const isGrpc = isGrpcRequest(request);
-    return (
-      <li className="tree__row">
-        <div className="tree__item tree__item--request">
-          <div className="tree__item__checkbox tree__indent">
-            <input type="checkbox" checked={isSelected} onChange={this.handleSelect} />
-          </div>
-          <button className="wide">
-            {isGrpc ? (
-              <GrpcTag />
-            ) : (
-              <MethodTag method={request.method} />
-            )}
-            <span className="inline-block">{request.name}</span>
-          </button>
+  return (
+    <li className="tree__row">
+      <div className="tree__item tree__item--request">
+        <div className="tree__item__checkbox tree__indent">
+          <input type="checkbox" checked={isSelected} onChange={onChange} />
         </div>
-      </li>
-    );
-  }
-}
+        <button className="wide">
+          {isRequest(request) ? <MethodTag method={request.method} /> : null}
+          {isGrpcRequest(request) ? <GrpcTag /> : null}
+          {isWebSocketRequest(request) ? <WebSocketTag /> : null}
+          <span className="inline-block">{request.name}</span>
+        </button>
+      </div>
+    </li>
+  );
+};

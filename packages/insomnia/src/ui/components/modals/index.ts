@@ -1,26 +1,50 @@
-import { trackPageView } from '../../../common/analytics';
+import { invariant } from '../../../utils/invariant';
+import { trackPageView } from '../../analytics';
+import { ModalProps } from '../base/modal';
 import { AlertModal, AlertModalOptions } from './alert-modal';
 import { ErrorModal, ErrorModalOptions } from './error-modal';
 import { PromptModal, PromptModalOptions } from './prompt-modal';
 
-const modals = {};
+interface ModalHandle {
+  show:(options: any) => void;
+  hide:() => void;
+}
 
-export function registerModal(instance) {
+const modals: Record<string, ModalHandle> = {};
+
+export function registerModal(instance: any, modalName?: string) {
   if (instance === null) {
     // Modal was unmounted
     return;
   }
 
-  modals[instance.constructor.name] = instance;
+  modals[modalName ?? instance.constructor.name] = instance;
 }
 
-export function showModal(modalCls, ...args) {
-  trackPageView(modalCls.name);
-  return _getModal(modalCls).show(...args);
+type GetRefHandleFromProps<Props> = Props extends React.RefAttributes<infer TModalHandle> ? TModalHandle : never;
+
+type ModalComponent<TModalProps> = React.ForwardRefExoticComponent<TModalProps & React.RefAttributes<GetRefHandleFromProps<TModalProps>>>;
+
+type ModalHandleShowOptions<TModalHandle> = TModalHandle extends {
+  show: (options: infer TOptions) => void;
+} ? TOptions : any;
+
+export function showModal<TModalProps extends ModalProps & React.RefAttributes<{
+  show:(options: any) => void;
+}>>(
+  modalComponent: ModalComponent<TModalProps>, config?: ModalHandleShowOptions<GetRefHandleFromProps<TModalProps>>,
+) {
+  const name = modalComponent.name || modalComponent.displayName;
+  invariant(name, 'Modal must have a name or displayName');
+  trackPageView(name);
+
+  const modalHandle = getModalComponentHandle(name) as unknown as GetRefHandleFromProps<TModalProps>;
+
+  return modalHandle.show(config);
 }
 
-export function showPrompt(config: PromptModalOptions) {
-  return showModal(PromptModal, config);
+export function showPrompt(options: PromptModalOptions) {
+  return showModal(PromptModal, options);
 }
 
 export function showAlert(config: AlertModalOptions) {
@@ -42,12 +66,9 @@ export function hideAllModals() {
   }
 }
 
-function _getModal(modalCls) {
-  const m = modals[modalCls.name || modalCls.WrappedComponent?.name];
+function getModalComponentHandle(name: string) {
+  const modalComponentRef = modals[name];
+  invariant(modalComponentRef, `Modal ${name} not found`);
 
-  if (!m) {
-    throw new Error('Modal was not registered with the app');
-  }
-
-  return m;
+  return modalComponentRef;
 }

@@ -87,7 +87,7 @@ export function normalizeToDotAndBracketNotation(prefix: string) {
 }
 
 /**
- * Parse a Nunjucks tag string into a usable abject
+ * Parse a Nunjucks tag string into a usable object
  * @param {string} tagStr - the template string for the tag
  */
 export function tokenizeTag(tagStr: string) {
@@ -102,7 +102,7 @@ export function tokenizeTag(tagStr: string) {
   // Tokenize Args //
   // ~~~~~~~~~~~~~ //
   const args: NunjucksParsedTagArg[] = [];
-  let quotedBy: string | null = null;
+  let quotedBy: "'" | '"' | null = null;
   let currentArg: string | null = null;
 
   for (let i = 0; i < argsStr.length + 1; i++) {
@@ -152,7 +152,7 @@ export function tokenizeTag(tagStr: string) {
 
     // End current argument
     if (currentArg !== null && argCompleted) {
-      let arg;
+      let arg: NunjucksParsedTagArg;
 
       if (quotedBy) {
         arg = {

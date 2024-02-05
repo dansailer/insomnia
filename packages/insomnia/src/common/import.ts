@@ -1,18 +1,21 @@
 import fs from 'fs';
-import { convert } from 'insomnia-importers';
 
 import type { ApiSpec } from '../models/api-spec';
 import type { BaseModel } from '../models/index';
 import * as models from '../models/index';
+import { Project } from '../models/project';
 import { isRequest } from '../models/request';
-import { isWorkspace, Workspace } from '../models/workspace';
+import { isWorkspace, Workspace, WorkspaceScope, WorkspaceScopeKeys } from '../models/workspace';
+import { SegmentEvent, trackSegmentEvent } from '../ui/analytics';
 import { AlertModal } from '../ui/components/modals/alert-modal';
+import { AskModal } from '../ui/components/modals/ask-modal';
 import { showError, showModal } from '../ui/components/modals/index';
-import { ImportToWorkspacePrompt, SetWorkspaceScopePrompt } from '../ui/redux/modules/helpers';
-import { SegmentEvent, trackSegmentEvent } from './analytics';
+import { showSelectModal } from '../ui/components/modals/select-modal';
+import { convert, ConvertResultType } from '../utils/importers/convert';
 import {
   BASE_ENVIRONMENT_ID_KEY,
   CONTENT_TYPE_GRAPHQL,
+  EXPORT_TYPE_ENVIRONMENT,
   EXPORT_TYPE_WORKSPACE,
   WORKSPACE_ID_KEY,
 } from './constants';
@@ -24,12 +27,6 @@ export interface ImportResult {
   source: string;
   error: Error | null;
   summary: Record<string, BaseModel[]>;
-}
-
-interface ConvertResultType {
-  id: string;
-  name: string;
-  description: string;
 }
 
 interface ConvertResult {
@@ -123,7 +120,7 @@ export async function importRaw(
   let results: ConvertResult;
 
   try {
-    results = await convert(rawContent);
+    results = (await convert(rawContent)) as unknown as ConvertResult;
   } catch (err) {
     const importResult: ImportResult = {
       source: 'not found',
@@ -168,7 +165,7 @@ export async function importRaw(
   // Workspace > Environment > RequestGroup > Request
   // Import everything backwards so they get inserted in the correct order
   data.resources.reverse();
-  const importedDocs = {};
+  const importedDocs: Record<string, any[]> = {};
 
   for (const model of models.all()) {
     importedDocs[model.type] = [];
@@ -191,6 +188,15 @@ export async function importRaw(
     // Replace null parentIds with current workspace
     if (!resource.parentId && resource._type !== EXPORT_TYPE_WORKSPACE) {
       resource.parentId = WORKSPACE_ID_KEY;
+    }
+
+    // Always generate base environment id, ensuring to not create another one
+    if (resource._type === EXPORT_TYPE_ENVIRONMENT) {
+      if (resource.parentId === WORKSPACE_ID_KEY || resource.parentId.match(`${models.workspace.prefix}_\w*`)) {
+        resource._id = BASE_ENVIRONMENT_ID_KEY;
+      } else {
+        resource.parentId = BASE_ENVIRONMENT_ID_KEY;
+      }
     }
 
     // Replace ID placeholders (eg. __WORKSPACE_ID__) with generated values
@@ -271,8 +277,26 @@ export async function importRaw(
     } else {
       // If workspace, check and set the scope and parentId while importing a new workspace
       if (isWorkspace(model)) {
-        await updateWorkspaceScope(resource as Workspace, resultsType, getWorkspaceScope);
+        // Set the workspace scope if creating a new workspace during import
+        //  IF is creating a new workspace
+        //  AND imported resource has no preset scope property OR scope is null
+        //  AND we have a function to get scope
+        if ((!resource.hasOwnProperty('scope') || resource.scope === null) && getWorkspaceScope) {
+          const workspaceName = resource.name;
+          let specName;
 
+          // If is from insomnia v4 and the spec has contents, add to the name when prompting
+          if (isInsomniaV4Import(resultsType)) {
+            const spec: ApiSpec | null = await models.apiSpec.getByParentId(resource._id);
+
+            if (spec && spec.contents.trim()) {
+              specName = spec.fileName;
+            }
+          }
+
+          const nameToPrompt = specName ? `${specName} / ${workspaceName}` : workspaceName;
+          resource.scope = await getWorkspaceScope(nameToPrompt);
+        }
         // If the workspace doesn't have a name, update the default name based on it's scope
         if (!resource.name) {
           const name =
@@ -283,7 +307,10 @@ export async function importRaw(
           resource.name = name;
         }
 
-        await createWorkspaceInProject(resource as Workspace, getProjectId);
+        if (getProjectId) {
+          // Set the workspace parent if creating a new workspace during import
+          resource.parentId = await getProjectId();
+        }
       }
 
       newDoc = await db.docCreate(model.type, resource);
@@ -330,43 +357,6 @@ export async function importRaw(
   return importRequest;
 }
 
-async function updateWorkspaceScope(
-  resource: Workspace,
-  resultType: ConvertResultType,
-  getWorkspaceScope?: SetWorkspaceScopePrompt,
-) {
-  // Set the workspace scope if creating a new workspace during import
-  //  IF is creating a new workspace
-  //  AND imported resource has no preset scope property OR scope is null
-  //  AND we have a function to get scope
-  if ((!resource.hasOwnProperty('scope') || resource.scope === null) && getWorkspaceScope) {
-    const workspaceName = resource.name;
-    let specName;
-
-    // If is from insomnia v4 and the spec has contents, add to the name when prompting
-    if (isInsomniaV4Import(resultType)) {
-      const spec: ApiSpec | null = await models.apiSpec.getByParentId(resource._id);
-
-      if (spec && spec.contents.trim()) {
-        specName = spec.fileName;
-      }
-    }
-
-    const nameToPrompt = specName ? `${specName} / ${workspaceName}` : workspaceName;
-    resource.scope = await getWorkspaceScope(nameToPrompt);
-  }
-}
-
-async function createWorkspaceInProject(
-  resource: Workspace,
-  getProjectId?: () => Promise<string>,
-) {
-  if (getProjectId) {
-    // Set the workspace parent if creating a new workspace during import
-    resource.parentId = await getProjectId();
-  }
-}
-
 export const isApiSpecImport = ({ id }: Pick<ConvertResultType, 'id'>) => (
   id === 'openapi3' || id === 'swagger2'
 );
@@ -374,3 +364,110 @@ export const isApiSpecImport = ({ id }: Pick<ConvertResultType, 'id'>) => (
 export const isInsomniaV4Import = ({ id }: Pick<ConvertResultType, 'id'>) => (
   id === 'insomnia-4'
 );
+
+export enum ForceToWorkspace {
+  new = 'new',
+  current = 'current',
+  existing = 'existing'
+}
+
+export type SelectExistingWorkspacePrompt = Promise<string | null>;
+
+// Returning null instead of a string will create a new workspace
+export type ImportToWorkspacePrompt = () => null | string | Promise<null | string>;
+export function askToImportIntoWorkspace({ workspaceId, forceToWorkspace, activeProjectWorkspaces }: { workspaceId?: string; forceToWorkspace?: ForceToWorkspace; activeProjectWorkspaces?: Workspace[] }): ImportToWorkspacePrompt {
+  return function() {
+    switch (forceToWorkspace) {
+      case ForceToWorkspace.new: {
+        return null;
+      }
+
+      case ForceToWorkspace.current: {
+        if (!workspaceId) {
+          return null;
+        }
+
+        return workspaceId;
+      }
+
+      case ForceToWorkspace.existing: {
+        // Return null if there are no available workspaces to chose from.
+        if (activeProjectWorkspaces?.length) {
+          return null;
+        }
+      }
+
+      default: {
+        if (!workspaceId) {
+          return null;
+        }
+
+        return new Promise(resolve => {
+          showModal(AskModal, {
+            title: 'Import',
+            message: 'Do you want to import into the current workspace or a new one?',
+            yesText: 'Current',
+            noText: 'New Workspace',
+            onDone: async (yes: boolean) => {
+              resolve(yes ? workspaceId : null);
+            },
+          });
+        });
+      }
+    }
+  };
+}
+
+export type SetWorkspaceScopePrompt = (name?: string) => WorkspaceScope | Promise<WorkspaceScope>;
+export function askToSetWorkspaceScope(scope?: WorkspaceScope): SetWorkspaceScopePrompt {
+  return name => {
+    switch (scope) {
+      case WorkspaceScopeKeys.collection:
+      case WorkspaceScopeKeys.design:
+        return scope;
+
+      default:
+        return new Promise(resolve => {
+          const message = name
+            ? `How would you like to import "${name}"?`
+            : 'Do you want to import as a Request Collection or a Design Document?';
+
+          showModal(AskModal, {
+            title: 'Import As',
+            message,
+            noText: 'Request Collection',
+            yesText: 'Design Document',
+            onDone: async (yes: boolean) => {
+              resolve(yes ? WorkspaceScopeKeys.design : WorkspaceScopeKeys.collection);
+            },
+          });
+        });
+    }
+  };
+}
+
+export type SetProjectIdPrompt = () => Promise<string>;
+export function askToImportIntoProject({ projects, activeProject }: { projects?: Project[]; activeProject?: Project }): SetProjectIdPrompt {
+  return function() {
+    return new Promise(resolve => {
+      // If only one project exists, return that
+      if (projects?.length === 1) {
+        return resolve(projects[0]._id);
+      }
+
+      const options = projects?.map(project => ({ name: project.name, value: project._id })) || [];
+      const defaultValue = activeProject?._id || null;
+
+      showSelectModal({
+        title: 'Import',
+        message: `Select a ${strings.project.singular.toLowerCase()} to import into`,
+        options,
+        value: defaultValue,
+        onDone: selectedProjectId => {
+          // @ts-expect-error onDone can send null as an argument; why/how?
+          resolve(selectedProjectId);
+        },
+      });
+    });
+  };
+}

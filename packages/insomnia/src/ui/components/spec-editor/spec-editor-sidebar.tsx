@@ -1,21 +1,14 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import { Sidebar } from 'insomnia-components';
-import React, { Component } from 'react';
+import React, { FC } from 'react';
 import styled from 'styled-components';
 import YAML from 'yaml';
 import YAMLSourceMap from 'yaml-source-map';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
 import type { ApiSpec } from '../../../models/api-spec';
+import { Sidebar } from './sidebar';
 
 interface Props {
   apiSpec: ApiSpec;
   handleSetSelection: (chStart: number, chEnd: number, lineStart: number, lineEnd: number) => void;
-}
-
-interface State {
-  error: string;
-  specContentJSON: boolean;
 }
 
 const StyledSpecEditorSidebar = styled.div`
@@ -23,99 +16,41 @@ const StyledSpecEditorSidebar = styled.div`
   overflow-y: auto;
 `;
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class SpecEditorSidebar extends Component<Props, State> {
-  state: State = {
-    error: '',
-    specContentJSON: false,
-  };
+export const SpecEditorSidebar: FC<Props> = ({ apiSpec, handleSetSelection }) => {
+  const onClick = (...itemPath: any[]): void => {
+    const scrollPosition = { start: { line: 0, col: 0 }, end: { line: 0, col: 200 } };
 
-  _handleScrollEditor(pos: {
-    start: {
-      line: number;
-      col: number;
-    };
-    end: {
-      line: number;
-      col: number;
-    };
-  }) {
-    const { handleSetSelection } = this.props;
-    // NOTE: We're subtracting 1 from everything because YAML CST uses
-    //   1-based indexing and we use 0-based.
-    handleSetSelection(pos.start.col - 1, pos.end.col - 1, pos.start.line - 1, pos.end.line - 1);
-  }
-
-  _mapPosition(itemPath: any[]) {
-    const sourceMap = new YAMLSourceMap();
-    const { contents } = this.props.apiSpec;
-    const scrollPosition = {
-      start: {
-        line: 0,
-        col: 0,
-      },
-      end: {
-        line: 0,
-        col: 200,
-      },
-    };
-
-    // Account for JSON (as string) line number shift
-    if (this.state.specContentJSON) {
+    try {
+      JSON.parse(apiSpec.contents);
+      // Account for JSON (as string) line number shift
       scrollPosition.start.line = 1;
-    }
+    } catch  {}
 
+    const sourceMap = new YAMLSourceMap();
     const specMap = sourceMap.index(
-      YAML.parseDocument(contents, {
+      YAML.parseDocument(apiSpec.contents, {
         keepCstNodes: true,
       }),
     );
     const itemMappedPosition = sourceMap.lookup(itemPath, specMap);
+    if (itemMappedPosition) {
+      scrollPosition.start.line += itemMappedPosition.start.line;
+    }
     const isServersSection = itemPath[0] === 'servers';
-    scrollPosition.start.line += itemMappedPosition.start.line;
-
     if (!isServersSection) {
       scrollPosition.start.line -= 1;
     }
 
     scrollPosition.end.line = scrollPosition.start.line;
-
-    this._handleScrollEditor(scrollPosition);
-  }
-
-  _handleItemClick = (...itemPath): void => {
-    this._mapPosition(itemPath);
+    // NOTE: We're subtracting 1 from everything because YAML CST uses
+    //   1-based indexing and we use 0-based.
+    handleSetSelection(scrollPosition.start.col - 1, scrollPosition.end.col - 1, scrollPosition.start.line - 1, scrollPosition.end.line - 1);
   };
 
-  componentDidMount() {
-    const { contents } = this.props.apiSpec;
-
-    try {
-      JSON.parse(contents);
-    } catch (e) {
-      this.setState({
-        specContentJSON: false,
-      });
-      return;
-    }
-
-    this.setState({
-      specContentJSON: true,
-    });
-  }
-
-  render() {
-    const { error } = this.state;
-
-    if (error) {
-      return <p className="notice error margin-sm">{error}</p>;
-    }
-
-    const specJSON = YAML.parse(this.props.apiSpec.contents);
-    return (
-      <StyledSpecEditorSidebar>
-        <Sidebar jsonData={specJSON} onClick={this._handleItemClick} />
-      </StyledSpecEditorSidebar>
-    );
-  }
-}
+  const specJSON = YAML.parse(apiSpec.contents);
+  return (
+    <StyledSpecEditorSidebar>
+      <Sidebar jsonData={specJSON} onClick={onClick} />
+    </StyledSpecEditorSidebar>
+  );
+};

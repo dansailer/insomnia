@@ -1,23 +1,16 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import React, { PureComponent, ReactNode } from 'react';
+import React, { FC, useCallback } from 'react';
+import { useSelector } from 'react-redux';
 
 import {
-  AUTH_ASAP,
-  AUTH_AWS_IAM,
-  AUTH_BASIC,
-  AUTH_BEARER,
-  AUTH_DIGEST,
-  AUTH_HAWK,
-  AUTH_NETRC,
-  AUTH_NONE,
-  AUTH_NTLM,
-  AUTH_OAUTH_1,
-  AUTH_OAUTH_2,
-  AUTOBIND_CFG,
+  AuthType,
   getAuthTypeName,
+  HAWK_ALGORITHM_SHA256,
 } from '../../../common/constants';
-import * as models from '../../../models';
-import type { Request, RequestAuthentication } from '../../../models/request';
+import { update } from '../../../models/helpers/request-operations';
+import { RequestAuthentication } from '../../../models/request';
+import { SIGNATURE_METHOD_HMAC_SHA1 } from '../../../network/o-auth-1/constants';
+import { GRANT_TYPE_AUTHORIZATION_CODE } from '../../../network/o-auth-2/constants';
+import { selectActiveRequest } from '../../redux/selectors';
 import { Dropdown } from '../base/dropdown/dropdown';
 import { DropdownButton } from '../base/dropdown/dropdown-button';
 import { DropdownDivider } from '../base/dropdown/dropdown-divider';
@@ -25,26 +18,150 @@ import { DropdownItem } from '../base/dropdown/dropdown-item';
 import { showModal } from '../modals';
 import { AlertModal } from '../modals/alert-modal';
 
-interface Props {
-  onChange: (r: Request, arg1: RequestAuthentication) => Promise<Request>;
-  request: Request;
-  className?: string;
-  children?: ReactNode;
+const defaultTypes: AuthType[] = [
+  'apikey',
+  'basic',
+  'digest',
+  'oauth1',
+  'oauth2',
+  'ntlm',
+  'iam',
+  'bearer',
+  'hawk',
+  'asap',
+  'netrc',
+];
+
+function makeNewAuth(type: string, oldAuth: RequestAuthentication = {}): RequestAuthentication {
+  switch (type) {
+    // No Auth
+    case 'none':
+      return {};
+
+    // API Key Authentication
+    case 'apikey':
+      return {
+        type,
+        disabled: oldAuth.disabled || false,
+        key: oldAuth.key || '',
+        value: oldAuth.value || '',
+        addTo: oldAuth.addTo || 'header',
+      };
+
+    // HTTP Basic Authentication
+    case 'basic':
+      return {
+        type,
+        useISO88591: oldAuth.useISO88591 || false,
+        disabled: oldAuth.disabled || false,
+        username: oldAuth.username || '',
+        password: oldAuth.password || '',
+      };
+
+    case 'digest':
+    case 'ntlm':
+      return {
+        type,
+        disabled: oldAuth.disabled || false,
+        username: oldAuth.username || '',
+        password: oldAuth.password || '',
+      };
+
+    case 'oauth1':
+      return {
+        type,
+        disabled: false,
+        signatureMethod: SIGNATURE_METHOD_HMAC_SHA1,
+        consumerKey: '',
+        consumerSecret: '',
+        tokenKey: '',
+        tokenSecret: '',
+        privateKey: '',
+        version: '1.0',
+        nonce: '',
+        timestamp: '',
+        callback: '',
+      };
+
+    // OAuth 2.0
+    case 'oauth2':
+      return {
+        type,
+        grantType: GRANT_TYPE_AUTHORIZATION_CODE,
+      };
+
+    // Aws IAM
+    case 'iam':
+      return {
+        type,
+        disabled: oldAuth.disabled || false,
+        accessKeyId: oldAuth.accessKeyId || '',
+        secretAccessKey: oldAuth.secretAccessKey || '',
+        sessionToken: oldAuth.sessionToken || '',
+      };
+
+    // Hawk
+    case 'hawk':
+      return {
+        type,
+        algorithm: HAWK_ALGORITHM_SHA256,
+      };
+
+    // Atlassian ASAP
+    case 'asap':
+      return {
+        type,
+        issuer: '',
+        subject: '',
+        audience: '',
+        additionalClaims: '',
+        keyId: '',
+        privateKey: '',
+      };
+
+    // Types needing no defaults
+    case 'netrc':
+    default:
+      return {
+        type,
+      };
+  }
 }
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class AuthDropdown extends PureComponent<Props> {
-  async _handleTypeChange(type: string) {
-    const { request, onChange } = this.props;
-    const { authentication } = request;
+const AuthItem: FC<{
+  type: AuthType;
+  nameOverride?: string;
+  isCurrent: (type: AuthType) => boolean;
+  onClick: (type: AuthType) => void;
+}> = ({ type, nameOverride, isCurrent, onClick }) => (
+  <DropdownItem onClick={() => onClick(type)}>
+    {<i className={`fa fa-${isCurrent(type) ? 'check' : 'empty'}`} />}{' '}
+    {nameOverride || getAuthTypeName(type, true)}
+  </DropdownItem>
+);
+AuthItem.displayName = DropdownItem.name;
+
+interface Props {
+  authTypes?: AuthType[];
+  disabled?: boolean;
+}
+export const AuthDropdown: FC<Props> = ({ authTypes = defaultTypes, disabled = false }) => {
+  const activeRequest = useSelector(selectActiveRequest);
+
+  const onClick = useCallback(async (type: AuthType) => {
+    if (!activeRequest || !('authentication' in activeRequest)) {
+      return;
+    }
+
+    const { authentication } = activeRequest;
 
     if (type === authentication.type) {
       // Type didn't change
       return;
     }
 
-    const newAuthentication = models.request.newAuth(type, authentication);
-    const defaultAuthentication = models.request.newAuth(authentication.type);
+    const newAuthentication = makeNewAuth(type, authentication);
+    const defaultAuthentication = makeNewAuth(authentication.type);
 
     // Prompt the user if fields will change between new and old
     for (const key of Object.keys(authentication)) {
@@ -65,44 +182,43 @@ export class AuthDropdown extends PureComponent<Props> {
         break;
       }
     }
+    update(activeRequest, { authentication: newAuthentication });
+  }, [activeRequest]);
+  const isCurrent = useCallback((type: AuthType) => {
+    if (!activeRequest || !('authentication' in activeRequest)) {
+      return false;
+    }
+    return type === (activeRequest.authentication.type || 'none');
+  }, [activeRequest]);
 
-    onChange(request, newAuthentication);
+  if (!activeRequest) {
+    return null;
   }
 
-  renderAuthType(type: string, nameOverride: string | null = null) {
-    const { authentication } = this.props.request;
-    const currentType = authentication.type || AUTH_NONE;
-    return (
-      <DropdownItem onClick={this._handleTypeChange} value={type}>
-        {currentType === type ? <i className="fa fa-check" /> : <i className="fa fa-empty" />}{' '}
-        {nameOverride || getAuthTypeName(type, true)}
-      </DropdownItem>
-    );
-  }
+  const itemProps = { onClick, isCurrent };
 
-  render() {
-    const { children, className } = this.props;
-    return (
-      <Dropdown
-        beside
-        // @ts-expect-error -- TSCONVERSION appears to be genuine
-        debug="true"
-      >
-        <DropdownDivider>Auth Types</DropdownDivider>
-        <DropdownButton className={className}>{children}</DropdownButton>
-        {this.renderAuthType(AUTH_BASIC)}
-        {this.renderAuthType(AUTH_DIGEST)}
-        {this.renderAuthType(AUTH_OAUTH_1)}
-        {this.renderAuthType(AUTH_OAUTH_2)}
-        {this.renderAuthType(AUTH_NTLM)}
-        {this.renderAuthType(AUTH_AWS_IAM)}
-        {this.renderAuthType(AUTH_BEARER)}
-        {this.renderAuthType(AUTH_HAWK)}
-        {this.renderAuthType(AUTH_ASAP)}
-        {this.renderAuthType(AUTH_NETRC)}
-        <DropdownDivider>Other</DropdownDivider>
-        {this.renderAuthType(AUTH_NONE, 'No Authentication')}
-      </Dropdown>
-    );
-  }
-}
+  return (
+    <Dropdown beside>
+      <DropdownDivider>Auth Types</DropdownDivider>
+      <DropdownButton className="tall" disabled={disabled}>
+        {'authentication' in activeRequest ? getAuthTypeName(activeRequest.authentication.type) || 'Auth' : 'Auth'}
+        <i className="fa fa-caret-down space-left" />
+      </DropdownButton>
+      {authTypes.map(authType =>
+        <AuthItem
+          key={authType}
+          type={authType}
+          {...itemProps}
+        />)}
+      <DropdownDivider key="divider-other">
+        Other
+      </DropdownDivider>
+      <AuthItem
+        key="none"
+        type="none"
+        nameOverride="No Authentication"
+        {...itemProps}
+      />
+    </Dropdown>
+  );
+};
